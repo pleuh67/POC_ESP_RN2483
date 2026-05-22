@@ -39,7 +39,7 @@
 // Paramètres d'envoi
 // ============================================================
 #define SEND_INTERVAL_MS  60000  // 60 s (respecte duty cycle 1% EU868)
-#define LORA_PORT         1      // port applicatif LoRaWAN (1-223)
+// Note : le port LoRaWAN est hardcodé à 1 dans la librairie rn2xx3 (txCommand "mac tx uncnf 1")
 
 // ============================================================
 // Debug

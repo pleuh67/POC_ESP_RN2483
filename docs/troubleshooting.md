@@ -45,7 +45,7 @@
 **Vérifications :**
 
 - Dans Orange Live Objects, vérifiez l'onglet **Messages** du device (et non la page d'accueil).
-- Vérifiez que le port applicatif `LORA_PORT` dans `config.h` est entre 1 et 223.
+- Le port applicatif est fixé à `1` par la librairie rn2xx3 (hardcodé dans `txCommand`).
 - Attendez au moins 60 secondes entre deux trames (duty cycle).
 - Vérifiez le RSSI affiché dans les messages : en dessous de -120 dBm, le signal est très faible.
 

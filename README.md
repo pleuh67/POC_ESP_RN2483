@@ -145,9 +145,19 @@ En résumé :
 Éditez `include/secret.h` :
 
 ```cpp
-const String DEVEUI = "0004A30B001A2B3C";   // DevEUI lu à l'étape 1
-const String APPEUI = "XXXXXXXXXXXXXXXX";   // AppEUI défini sur Orange
-const String APPKEY = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // AppKey défini
+static const LoraDevice LORA_DEVICES[] =
+{
+    { "0004A30B001A2B3C", "XXXXXXXXXXXXXXXX", "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "Module-01" },
+    { nullptr, nullptr, nullptr, nullptr }
+};
+
+static const LoraDevice LORA_DEFAULT =
+{
+    "0000000000000000",
+    "XXXXXXXXXXXXXXXX",
+    "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "DEFAULT"
+};
 ```
 
 ### Étape 4 — Désactiver le mode debug DevEUI
@@ -228,6 +238,7 @@ dans les paramètres de l'application LoRaWAN.
 | Librairie | Source | Rôle |
 |---|---|---|
 | `jpmeijers/RN2xx3 Arduino Library` | [PlatformIO Registry](https://registry.platformio.org/libraries/jpmeijers/RN2xx3%20Arduino%20Library) | Communication UART avec le RN2483 |
+| `adafruit/Adafruit NeoPixel` | [PlatformIO Registry](https://registry.platformio.org/libraries/adafruit/Adafruit%20NeoPixel) | LED RGB WS2812 (GPIO48) |
 
 Installée automatiquement par PlatformIO à la première compilation.
 

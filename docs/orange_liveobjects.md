@@ -45,9 +45,11 @@ Cliquez sur **Create**. Le device apparaît dans la liste avec le statut **Inact
 Copiez AppEUI et AppKey dans `include/secret.h` :
 
 ```cpp
-const String DEVEUI = "0004A30B001A2B3C";
-const String APPEUI = "0000000000000001";
-const String APPKEY = "2B7E151628AED2A6ABF7158809CF4F3C";
+static const LoraDevice LORA_DEVICES[] =
+{
+    { "0004A30B001A2B3C", "0000000000000001", "2B7E151628AED2A6ABF7158809CF4F3C", "Module-01" },
+    { nullptr, nullptr, nullptr, nullptr }
+};
 ```
 
 ---
