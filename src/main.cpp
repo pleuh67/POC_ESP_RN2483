@@ -7,6 +7,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <rn2xx3.h>
 #include "config.h"
+#include "node_data.h"
 #include "secret.h"   // table des modules + clés OTAA - non commité sur git
 
 // ============================================================
@@ -335,23 +336,75 @@ void initLoRa()
 }
 
 // ---------------------------------------------------------------------------*
-// @brief  Construit et envoie un payload LoRaWAN (compteur 16 bits en hex)
-// @note   Remplacer le contenu par les données métier réelles
+// @brief  Encode et envoie un NodeData sur LoRaWAN (19 octets, big-endian)
+// @param  node  Données du nœud à transmettre
 // @note   TX non confirmé, port 1 (hardcodé dans la librairie rn2xx3)
+// @note   Format : temp(2) hum(2) poids×4(8) vbat(2) vsol(2) lux(2) rucherID(1)
 // ---------------------------------------------------------------------------*
-void sendPayload()
+void sendPayload(const NodeData& node)
 {
-  static uint16_t counter = 0;
+  uint8_t buf[NODE_PAYLOAD_BYTES];
 
-  char payload[5];
-  snprintf(payload, sizeof(payload), "%04X", counter);
+  // Octets 0-1 : Température DHT22 (int16 ×100)
+  int16_t temp = (int16_t)(node.temp_c * 100.0f);
+  buf[0] = (temp >> 8) & 0xFF;
+  buf[1] =  temp        & 0xFF;
 
-  Serial.printf("[LoRa] Envoi payload : %s (compteur=%d, module=%s)\n",
-                payload, counter, g_label.c_str());
+  // Octets 2-3 : Humidité DHT22 (uint16 ×100)
+  uint16_t hum = (uint16_t)(node.hum_pct * 100.0f);
+  buf[2] = (hum >> 8) & 0xFF;
+  buf[3] =  hum        & 0xFF;
+
+  // Octets 4-5 : Poids Balance 1 (int16 ×100)
+  int16_t p1 = (int16_t)(node.poids1_kg * 100.0f);
+  buf[4] = (p1 >> 8) & 0xFF;
+  buf[5] =  p1        & 0xFF;
+
+  // Octets 6-7 : Poids Balance 2 (int16 ×100)
+  int16_t p2 = (int16_t)(node.poids2_kg * 100.0f);
+  buf[6] = (p2 >> 8) & 0xFF;
+  buf[7] =  p2        & 0xFF;
+
+  // Octets 8-9 : Poids Balance 3 (int16 ×100)
+  int16_t p3 = (int16_t)(node.poids3_kg * 100.0f);
+  buf[8]  = (p3 >> 8) & 0xFF;
+  buf[9]  =  p3        & 0xFF;
+
+  // Octets 10-11 : Poids Balance 4 (int16 ×100)
+  int16_t p4 = (int16_t)(node.poids4_kg * 100.0f);
+  buf[10] = (p4 >> 8) & 0xFF;
+  buf[11] =  p4        & 0xFF;
+
+  // Octets 12-13 : Tension batterie (uint16 ×100)
+  uint16_t vbat = (uint16_t)(node.vbat_v * 100.0f);
+  buf[12] = (vbat >> 8) & 0xFF;
+  buf[13] =  vbat        & 0xFF;
+
+  // Octets 14-15 : Tension solaire (uint16 ×100)
+  uint16_t vsol = (uint16_t)(node.vsol_v * 100.0f);
+  buf[14] = (vsol >> 8) & 0xFF;
+  buf[15] =  vsol        & 0xFF;
+
+  // Octets 16-17 : Luminosité (uint16)
+  buf[16] = (node.lux >> 8) & 0xFF;
+  buf[17] =  node.lux        & 0xFF;
+
+  // Octet 18 : RucherID (uint8)
+  buf[18] = node.rucher_id;
+
+  // Conversion en chaîne hexadécimale pour txCommand
+  char hexStr[NODE_PAYLOAD_BYTES * 2 + 1];
+  for (uint8_t i = 0; i < NODE_PAYLOAD_BYTES; i++)
+  {
+    snprintf(&hexStr[i * 2], 3, "%02X", buf[i]);
+  }
+
+  Serial.printf("[LoRa] Envoi %d octets : %s (module=%s)\n",
+                NODE_PAYLOAD_BYTES, hexStr, g_label.c_str());
 
   ledSet(60, 60, 60);   // LED blanche courte : envoi en cours
 
-  TX_RETURN_TYPE result = myLora.txCommand("mac tx uncnf 1 ", String(payload), false);
+  TX_RETURN_TYPE result = myLora.txCommand("mac tx uncnf 1 ", String(hexStr), false);
 
   ledOff();
 
@@ -359,12 +412,10 @@ void sendPayload()
   {
     case TX_SUCCESS:
       Serial.println("[LoRa] OK Trame envoyee");
-      counter++;
       break;
 
     case TX_WITH_RX:
       Serial.println("[LoRa] OK Trame envoyee + downlink recu");
-      counter++;
       break;
 
     case TX_FAIL:
@@ -389,6 +440,9 @@ void setup()
 
 void loop()
 {
-  sendPayload();
+  NodeData node     = {};   // zéros — à remplacer par les lectures capteurs réels
+  node.rucher_id    = 1;
+
+  sendPayload(node);
   delay(SEND_INTERVAL_MS);
 }

@@ -77,7 +77,7 @@ Une fois le terminal ouvert, la séquence complète s'affiche :
   PSRAM   : 0 KB
 ------------------------------------------------------------
   DEBUG_HWEUI      : false
-  SEND_INTERVAL_MS : 60000 ms
+  SEND_INTERVAL_MS : 300000 ms
   RN_UART_NUM      : 1
   RN_PIN_RX        : GPIO4
   RN_PIN_TX        : GPIO5
@@ -221,117 +221,126 @@ static const LoraDevice LORA_DEFAULT =
 #include "config.h"
 #include "secret.h"
 
-Adafruit_NeoPixel led(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel  led(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Clés actives chargées au boot
-String g_deveui, g_appeui, g_appkey, g_label;
+String  g_deveui, g_appeui, g_appkey, g_label;
 
+// ---------------------------------------------------------------------------*
+// @brief  Applique une couleur RGB à la LED WS2812
+// @param  r  Composante rouge (0-255)
+// @param  g  Composante verte (0-255)
+// @param  b  Composante bleue (0-255)
+// ---------------------------------------------------------------------------*
 void ledSet(uint8_t r, uint8_t g, uint8_t b)
 {
-    led.setPixelColor(0, led.Color(r, g, b));
-    led.show();
+  led.setPixelColor(0, led.Color(r, g, b));
+  led.show();
 }
 
+// ---------------------------------------------------------------------------*
+// @brief  Éteint la LED WS2812
+// ---------------------------------------------------------------------------*
 void ledOff()
 {
-    ledSet(0, 0, 0);
+  ledSet(0, 0, 0);
 }
 
+// ---------------------------------------------------------------------------*
+// @brief  Séquence de boot : clignote en orange, affiche les infos de
+//         compilation, puis LED verte 1 s
+// @note   Durée totale pilotée par BOOT_WAIT_MS
+// ---------------------------------------------------------------------------*
 void bootWait()
 {
-    led.begin();
-    led.setBrightness(38);   // 15%
-    led.show();
-    Serial.begin(115200);
+  led.begin();
+  led.setBrightness(38);
+  led.show();
+  Serial.begin(115200);
 
-    uint32_t start    = millis();
-    uint32_t deadline = start + BOOT_WAIT_MS;
-    bool     ledState = false;
-    uint32_t ledTimer = start;
+  uint32_t start    = millis();
+  uint32_t deadline = start + BOOT_WAIT_MS;
+  bool     ledState = false;
+  uint32_t ledTimer = start;
 
-    while (millis() < deadline)
+  while (millis() < deadline)
+  {
+    uint32_t now      = millis();
+    uint32_t interval = ledState ? BOOT_LED_ON_MS : BOOT_LED_OFF_MS;
+
+    if (now - ledTimer >= interval)
     {
-        uint32_t now      = millis();
-        uint32_t interval = ledState ? BOOT_LED_ON_MS : BOOT_LED_OFF_MS;
+      ledState = !ledState;
+      ledTimer = now;
 
-        if (now - ledTimer >= interval)
-        {
-            ledState = !ledState;
-            ledTimer = now;
-
-            if (ledState)
-            {
-                ledSet(BOOT_LED_R, BOOT_LED_G, BOOT_LED_B);
-            }
-            else
-            {
-                ledOff();
-            }
-        }
+      if (ledState) { ledSet(BOOT_LED_R, BOOT_LED_G, BOOT_LED_B); }
+      else          { ledOff(); }
     }
+  }
 
-    ledOff();
+  ledOff();
 
-    Serial.println();
-    Serial.println("============================================================");
-    Serial.println("  NOM_PROJET - DESCRIPTION");
-    Serial.println("============================================================");
-    Serial.println("  INFORMATIONS DE COMPILATION");
-    Serial.println("------------------------------------------------------------");
-    Serial.print  ("  Date    : "); Serial.println(__DATE__);
-    Serial.print  ("  Heure   : "); Serial.println(__TIME__);
-    Serial.print  ("  Fichier : "); Serial.println(__FILE__);
-    Serial.print  ("  Arduino : "); Serial.println(ARDUINO);
-    Serial.print  ("  IDF     : "); Serial.println(ESP_IDF_VERSION_MAJOR);
-    Serial.print  ("  CPU MHz : "); Serial.print(getCpuFrequencyMhz());          Serial.println(" MHz");
-    Serial.print  ("  Flash   : "); Serial.print(ESP.getFlashChipSize() / 1024); Serial.println(" KB");
-    Serial.print  ("  RAM     : "); Serial.print(ESP.getHeapSize()      / 1024); Serial.println(" KB");
-    Serial.print  ("  PSRAM   : "); Serial.print(ESP.getPsramSize()     / 1024); Serial.println(" KB");
-    Serial.println("------------------------------------------------------------");
-    // Serial.print("  MON_PARAM : "); Serial.println(MON_PARAM);
-    Serial.println("============================================================");
-    Serial.println();
+  Serial.println();
+  Serial.println("============================================================");
+  Serial.println("  NOM_PROJET - DESCRIPTION");
+  Serial.println("============================================================");
+  Serial.println("  INFORMATIONS DE COMPILATION");
+  Serial.println("------------------------------------------------------------");
+  Serial.printf("  Date    : %s\n",     __DATE__);
+  Serial.printf("  Heure   : %s\n",     __TIME__);
+  Serial.printf("  Fichier : %s\n",     __FILE__);
+  Serial.printf("  Arduino : %d\n",     ARDUINO);
+  Serial.printf("  IDF     : %d\n",     ESP_IDF_VERSION_MAJOR);
+  Serial.printf("  CPU MHz : %u MHz\n", getCpuFrequencyMhz());
+  Serial.printf("  Flash   : %u KB\n",  ESP.getFlashChipSize() / 1024);
+  Serial.printf("  RAM     : %u KB\n",  ESP.getHeapSize()      / 1024);
+  Serial.printf("  PSRAM   : %u KB\n",  ESP.getPsramSize()     / 1024);
+  Serial.println("------------------------------------------------------------");
+  // Serial.printf("  MON_PARAM : %d\n", MON_PARAM);
+  Serial.println("============================================================");
+  Serial.println();
 
-    ledSet(BOOT_READY_R, BOOT_READY_G, BOOT_READY_B);
-    delay(1000);
-    ledOff();
+  ledSet(BOOT_READY_R, BOOT_READY_G, BOOT_READY_B);
+  delay(1000);
+  ledOff();
 }
 
+// ---------------------------------------------------------------------------*
+// @brief  Recherche les clés OTAA correspondant au DevEUI hardware
+// @param  hwDeveui  DevEUI lu via myLora.hweui() (16 caractères hex)
+// @note   Remplit g_deveui, g_appeui, g_appkey, g_label
+// @note   Si absent de LORA_DEVICES[], utilise LORA_DEFAULT
+// ---------------------------------------------------------------------------*
 void lookupDevice(const String& hwDeveui)
 {
-    Serial.println("[Keys] Recherche des cles pour DevEUI : " + hwDeveui);
+  Serial.printf("[Keys] Recherche des cles pour DevEUI : %s\n", hwDeveui.c_str());
 
-    for (int i = 0; LORA_DEVICES[i].deveui != nullptr; i++)
+  for (uint8_t i = 0; LORA_DEVICES[i].deveui != nullptr; i++)
+  {
+    if (hwDeveui.equalsIgnoreCase(String(LORA_DEVICES[i].deveui)))
     {
-        if (hwDeveui.equalsIgnoreCase(String(LORA_DEVICES[i].deveui)))
-        {
-            g_deveui = String(LORA_DEVICES[i].deveui);
-            g_appeui = String(LORA_DEVICES[i].appeui);
-            g_appkey = String(LORA_DEVICES[i].appkey);
-            g_label  = String(LORA_DEVICES[i].label);
+      g_deveui = String(LORA_DEVICES[i].deveui);
+      g_appeui = String(LORA_DEVICES[i].appeui);
+      g_appkey = String(LORA_DEVICES[i].appkey);
+      g_label  = String(LORA_DEVICES[i].label);
 
-            Serial.println("[Keys] OK Module trouve    : " + g_label);
-            Serial.println("[Keys]    DevEUI           : " + g_deveui);
-            Serial.println("[Keys]    AppEUI           : " + g_appeui);
-            Serial.println("[Keys]    AppKey           : " + g_appkey);
-            return;
-        }
+      Serial.printf("[Keys] OK Module trouve : %s\n", g_label.c_str());
+      return;
     }
+  }
 
-    // Non trouvé → clés par défaut
-    g_deveui = hwDeveui;
-    g_appeui = String(LORA_DEFAULT.appeui);
-    g_appkey = String(LORA_DEFAULT.appkey);
-    g_label  = String(LORA_DEFAULT.label);
+  g_deveui = hwDeveui;
+  g_appeui = String(LORA_DEFAULT.appeui);
+  g_appkey = String(LORA_DEFAULT.appkey);
+  g_label  = String(LORA_DEFAULT.label);
 
-    Serial.println("[Keys] AVERTISSEMENT : DevEUI absent de secret.h");
-    Serial.println("[Keys]   -> Cles par defaut utilisees (label : " + g_label + ")");
-    Serial.println("[Keys]   -> Ajoutez ce DevEUI dans include/secret.h");
+  Serial.println("[Keys] AVERTISSEMENT : DevEUI absent de secret.h");
+  Serial.printf("[Keys]   -> Cles par defaut (label : %s)\n", g_label.c_str());
 }
 
 void setup()
 {
-    bootWait();
-    // ... initLoRa() ou équivalent
+  bootWait();
+  // ... initLoRa() ou équivalent
 }
 ```

@@ -38,7 +38,8 @@
 // ============================================================
 // Paramètres d'envoi
 // ============================================================
-#define SEND_INTERVAL_MS  60000  // 60 s (respecte duty cycle 1% EU868)
+#define INTERVAL_PAYLOAD  5                             // Intervalle d'envoi en minutes
+#define SEND_INTERVAL_MS  (INTERVAL_PAYLOAD * 60000UL) // Converti en ms pour delay()
 // Note : le port LoRaWAN est hardcodé à 1 dans la librairie rn2xx3 (txCommand "mac tx uncnf 1")
 
 // ============================================================

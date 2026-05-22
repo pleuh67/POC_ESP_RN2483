@@ -26,7 +26,7 @@ Sélectionnez le type : **LoRa device (OTAA)**
 
 | Champ | Valeur | Remarque |
 |---|---|---|
-| **Name** | `POC_ESP_2483` | Nom libre |
+| **Name** | `POC_ESP_RN2483` | Nom libre |
 | **DevEUI** | `0004A30B001A2B3C` | Lu sur le port série (étape 1) |
 | **AppEUI** | valeur de votre choix | 8 octets hex, ex : `0000000000000001` |
 | **AppKey** | valeur de votre choix | 16 octets hex, clé AES-128 |
@@ -59,7 +59,7 @@ static const LoraDevice LORA_DEVICES[] =
 Après une jointure OTAA réussie, les trames remontées par le device
 sont visibles dans :
 
-**Devices → POC_ESP_2483 → Messages (onglet Data)**
+**Devices → POC_ESP_RN2483 → Messages (onglet Data)**
 
 Chaque trame affiche :
 - L'horodatage de réception
@@ -69,23 +69,10 @@ Chaque trame affiche :
 
 ---
 
-## Configurer un codec de décodage (optionnel)
+## Configurer un codec de décodage
 
-Pour décoder le payload hex en valeurs lisibles, créez un codec JavaScript
-dans **Applications → votre application → Codec** :
-
-```javascript
-// Exemple : décodage d'un compteur 16 bits
-function decodeUplink(input) {
-  var bytes = input.bytes;
-  var counter = (bytes[0] << 8) | bytes[1];
-  return {
-    data: {
-      counter: counter
-    }
-  };
-}
-```
+Pour décoder le payload (19 octets) en valeurs lisibles, copiez le codec JavaScript
+depuis [`docs/codec_lora.md`](codec_lora.md) dans **Applications → votre application → Codec**.
 
 ---
 

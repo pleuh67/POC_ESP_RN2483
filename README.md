@@ -38,17 +38,22 @@
 ```
 POC_ESP_2483/
 ├── docs/
+│   ├── boot_procedure.md       <- Procédure de boot et LED d'état
 │   ├── cablage.md              <- Schéma et détail du câblage
+│   ├── codec_lora.md           <- Format payload 19 octets + codec JS Orange
 │   ├── orange_liveobjects.md   <- Procédure enregistrement Orange
-│   └── troubleshooting.md      <- Guide de dépannage
+│   ├── troubleshooting.md      <- Guide de dépannage
+│   └── unit_testing.md         <- Guide tests unitaires PlatformIO
 ├── include/
 │   ├── config.h                <- Broches, paramètres (commité)
+│   ├── node_data.h             <- Structure NodeData + NODE_PAYLOAD_BYTES
 │   ├── secret.h                <- Clés OTAA (NON commité - .gitignore)
 │   └── secret.h.example        <- Template des clés (commité, sans valeurs)
 ├── src/
 │   └── main.cpp                <- Code principal
-├── lib/                        <- Librairies locales (vide = gestion PlatformIO)
-├── test/                       <- Tests unitaires
+├── test/
+│   └── test_lookup/            <- Tests unitaires (pio test -e native)
+├── CLAUDE.md                   <- Conventions et instructions pour Claude Code
 ├── .gitignore
 ├── platformio.ini
 └── README.md
@@ -114,17 +119,23 @@ Compilez et flashez via PlatformIO (Upload), puis ouvrez le moniteur série (115
 Sortie attendue :
 
 ```
-============================================
-  POC_ESP_2483 - ESP32-S3 + RN2483 OTAA
-  Reseau : Orange LoRaWAN EU868
-============================================
-[LoRa] Initialisation du RN2483...
-[LoRa] Firmware RN2483 : 1.0.5
---------------------------------------------
-[LoRa] DevEUI hardware : 0004A30B001A2B3C
-[LoRa] -> Copiez ce DevEUI dans Orange Live Objects
-[LoRa] -> puis renseignez DEVEUI dans include/secret.h
---------------------------------------------
+============================================================
+  POC_ESP_2483 - ESP32-S3 + RN2483 OTAA - Orange EU868
+============================================================
+  ...infos compilation...
+------------------------------------------------------------
+  DEBUG_HWEUI      : true
+  ...
+============================================================
+
+------------------------------------------------------------
+  TESTS PERIPHERIQUES
+------------------------------------------------------------
+[Test] LED WS2812          OK (verifier visuellement)
+[Test] RN2483              OK (firmware : 1.0.5, DevEUI : 0004A30B001A2B3C)
+------------------------------------------------------------
+  Bilan : 2 OK  0 ECHEC
+------------------------------------------------------------
 ```
 
 Notez le **DevEUI**.
@@ -175,9 +186,9 @@ Recompilez, flashez et ouvrez le moniteur série.
 Sortie attendue :
 
 ```
-[LoRa] Tentative jointure OTAA 1/3...
-[LoRa] OK Jointure OTAA reussie !
-[LoRa] Envoi payload : 0000 (compteur=0)
+[LoRa] Tentative jointure OTAA 1/3 (module : Module-01)...
+[LoRa] OK Jointure OTAA reussie ! (module : Module-01)
+[LoRa] Envoi 19 octets : 000000000000000000000000000000000000 (module=Module-01)
 [LoRa] OK Trame envoyee
 ```
 
@@ -185,8 +196,8 @@ Sortie attendue :
 
 ## 6. Utilisation
 
-Une fois la jointure réussie, le device envoie une trame toutes les **60 secondes**
-(paramètre `SEND_INTERVAL_MS` dans `config.h`).
+Une fois la jointure réussie, le device envoie une trame toutes les **5 minutes**
+(paramètre `INTERVAL_PAYLOAD` dans `config.h`, converti en ms via `SEND_INTERVAL_MS`).
 
 Les trames sont visibles dans Orange Live Objects :
 **Devices → votre device → Messages**
@@ -195,26 +206,21 @@ Les trames sont visibles dans Orange Live Objects :
 
 ## 7. Adapter le payload à vos données
 
-Le payload de démonstration envoie un simple compteur 16 bits.
-Modifiez la fonction `sendPayload()` dans `src/main.cpp` :
+Le payload envoie **19 octets** (format fixe, big-endian) définis dans `include/node_data.h` :
 
-```cpp
-void sendPayload() {
-  // Exemple : température (int16 x100) + humidité (uint8)
-  int16_t temp_x100 = 2350;   // représente 23.50 °C
-  uint8_t humidity  = 65;     // 65 %
+| Octets | Donnée          | Type   | Facteur |
+|--------|-----------------|--------|---------|
+| 0-1    | Température     | int16  | ×100    |
+| 2-3    | Humidité        | uint16 | ×100    |
+| 4-11   | Poids 1→4       | int16  | ×100    |
+| 12-13  | Tension batterie| uint16 | ×100    |
+| 14-15  | Tension solaire | uint16 | ×100    |
+| 16-17  | Luminosité      | uint16 | ×1      |
+| 18     | RucherID        | uint8  | ×1      |
 
-  char payload[9];
-  snprintf(payload, sizeof(payload), "%04X%02X",
-           (uint16_t)temp_x100, humidity);
-  // Résultat : "092041" (3 octets)
+Renseignez les champs du `NodeData` dans `loop()` avec les lectures réelles de vos capteurs.
 
-  myLora.txHex(String(payload), false);
-}
-```
-
-Le décodage côté Orange Live Objects se configure via un **codec** JavaScript
-dans les paramètres de l'application LoRaWAN.
+Le codec JavaScript de décodage est disponible dans [`docs/codec_lora.md`](docs/codec_lora.md).
 
 ---
 
@@ -228,8 +234,8 @@ dans les paramètres de l'application LoRaWAN.
 | Puissance max | 14 dBm (25 mW) |
 | Spreading Factor | SF7 (rapide, courte portée) à SF12 (lent, longue portée) |
 
-> Ne pas descendre `SEND_INTERVAL_MS` sous **36 000** ms.
-> La valeur par défaut de 60 000 ms est un minimum raisonnable pour un POC.
+> Ne pas descendre `INTERVAL_PAYLOAD` sous **1 minute** (60 000 ms).
+> La valeur par défaut de 5 minutes est un bon compromis pour un POC.
 
 ---
 
