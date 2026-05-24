@@ -42,6 +42,44 @@ La communication est **full-duplex** (TX/RX) et complétée par une broche de **
 
 ---
 
+## Bus I2C — Capteurs (BME280, DS3231, INA219, MAX44009, AT24C32)
+
+| Signal | ESP32-S3 (GPIO) | Détail |
+|--------|-----------------|--------|
+| **SDA** | **GPIO 35** | Données I2C |
+| **SCL** | **GPIO 36** | Horloge I2C (50 kHz) |
+| **VCC** | **3.3V** | Alimentation commune |
+| **GND** | **GND** | Masse commune |
+
+> Les modules avec pull-ups intégrés (4.7 kΩ) sont préférables.
+> Sans pull-ups : ajouter 4.7 kΩ entre SDA et 3.3V, idem SCL.
+
+```
+  ESP32-S3
+  ┌──────────┐
+  │  GPIO35  ├─── SDA ──┬── BME280
+  │  GPIO36  ├─── SCL ──┤   DS3231
+  │  3.3V    ├──────────┤   INA219
+  │  GND     ├──────────┤   MAX44009
+  └──────────┘          └── AT24C32
+```
+
+---
+
+## Balance 1 — HX711 (cellule de charge)
+
+| HX711 | ESP32-S3 (GPIO) | Détail |
+|-------|-----------------|--------|
+| **DOUT** | **GPIO 10** | Données série HX711 |
+| **SCK**  | **GPIO 11** | Horloge HX711 |
+| **VCC**  | **3.3V** | Alimentation |
+| **GND**  | **GND** | Masse |
+
+> Le facteur d'étalonnage `HX711_SCALE` dans `config.h` est à ajuster
+> avec un poids connu : `HX711_SCALE = raw / poids_kg`.
+
+---
+
 ## Notes importantes
 
 ### Niveaux de tension

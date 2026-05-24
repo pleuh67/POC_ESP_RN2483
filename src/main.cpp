@@ -4,10 +4,16 @@
 // ============================================================
 
 #include <Arduino.h>
+#include <Wire.h>
 #include <Adafruit_NeoPixel.h>
 #include <rn2xx3.h>
+#include <RTClib.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_INA219.h>
+#include <HX711.h>
 #include "config.h"
 #include "node_data.h"
+#include "functions.h"
 #include "secret.h"   // table des modules + clés OTAA - non commité sur git
 
 // ============================================================
@@ -16,6 +22,14 @@
 Adafruit_NeoPixel  led(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 HardwareSerial     rnSerial(RN_UART_NUM);
 rn2xx3             myLora(rnSerial);
+
+// Capteurs I2C
+RTC_DS3231         rtc;                            // 0x68 — horloge temps réel
+Adafruit_BME280    bme;                            // 0x76 — temp / humidité / pression
+Adafruit_INA219    ina219(I2C_ADDR_INA219);        // 0x40 — tension / courant batterie
+
+// Balance 1 — HX711 (GPIO10/11)
+HX711              scale;
 
 // Clés actives — renseignées au boot par lookupDevice()
 String  g_deveui;
@@ -175,6 +189,223 @@ bool testRN2483()
 }
 
 // ---------------------------------------------------------------------------*
+// @brief  Test DS3231 : vérifie la présence et lit la date/heure courante
+// @return bool  True si le module répond
+// ---------------------------------------------------------------------------*
+bool testDS3231()
+{
+  Serial.println("[Test] DS3231 RTC...");
+  if (!rtc.begin())
+  {
+    Serial.println("[Test] DS3231              ECHEC (non detecte sur I2C 0x68)");
+    return false;
+  }
+  DateTime now = rtc.now();
+  Serial.printf("[Test] DS3231              OK (%04d-%02d-%02d %02d:%02d:%02d)\n",
+                now.year(), now.month(), now.day(),
+                now.hour(), now.minute(), now.second());
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Test BME280 : vérifie la présence et lit temp/humidité/pression
+// @return bool  True si le capteur répond
+// ---------------------------------------------------------------------------*
+bool testBME280()
+{
+  Serial.println("[Test] BME280...");
+  if (!bme.begin(I2C_ADDR_BME280))
+  {
+    Serial.println("[Test] BME280              ECHEC (non detecte sur I2C 0x76)");
+    return false;
+  }
+  Serial.printf("[Test] BME280              OK (%.1f C  %.1f %%  %.1f hPa)\n",
+                bme.readTemperature(), bme.readHumidity(),
+                bme.readPressure() / 100.0f);
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Lit la luminosité du MAX44009 via I2C direct (registres 0x03/0x04)
+// @return float  Luminosité en lux, ou -1.0 si erreur
+// ---------------------------------------------------------------------------*
+float max44009ReadLux()
+{
+  Wire.beginTransmission(I2C_ADDR_LUX);
+  Wire.write(0x03);
+  if (Wire.endTransmission(false) != 0)
+    return -1.0f;
+
+  Wire.requestFrom((uint8_t)I2C_ADDR_LUX, (uint8_t)2);
+  if (Wire.available() < 2)
+    return -1.0f;
+
+  uint8_t hi = Wire.read();
+  uint8_t lo = Wire.read();
+  // Formule MAX44009 : lux = 2^exp × mantisse × 0.045
+  uint8_t exp      = (hi >> 4) & 0x0F;
+  uint8_t mantissa = ((hi & 0x0F) << 4) | (lo & 0x0F);
+  return (float)(1 << exp) * mantissa * 0.045f;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Test MAX44009 : vérifie la présence et lit la luminosité
+// @return bool  True si le capteur répond
+// ---------------------------------------------------------------------------*
+bool testMAX44009()
+{
+  Serial.println("[Test] MAX44009...");
+  float lux = max44009ReadLux();
+  if (lux < 0.0f)
+  {
+    Serial.printf("[Test] MAX44009            ECHEC (non detecte sur 0x%02X)\n", I2C_ADDR_LUX);
+    return false;
+  }
+  Serial.printf("[Test] MAX44009            OK (%.1f lux)\n", lux);
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Test INA219 : vérifie la présence et lit tension/courant batterie
+// @return bool  True si le capteur répond
+// ---------------------------------------------------------------------------*
+bool testINA219()
+{
+  Serial.println("[Test] INA219...");
+  if (!ina219.begin())
+  {
+    Serial.println("[Test] INA219              ECHEC (non detecte sur I2C 0x40)");
+    return false;
+  }
+  Serial.printf("[Test] INA219              OK (%.2f V  %.1f mA)\n",
+                ina219.getBusVoltage_V(),
+                ina219.getCurrent_mA());
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Test HX711 : vérifie que la cellule de charge répond
+// @return bool  True si le module est prêt
+// ---------------------------------------------------------------------------*
+bool testHX711()
+{
+  Serial.println("[Test] HX711 balance 1...");
+  if (!scale.is_ready())
+  {
+    Serial.println("[Test] HX711              ECHEC (pas de reponse DOUT/SCK)");
+    Serial.printf("[Test]   -> Verifiez GPIO%d (DOUT) et GPIO%d (SCK)\n",
+                  HX711_PIN_DOUT, HX711_PIN_SCK);
+    return false;
+  }
+  long  raw = scale.read_average(5);
+  float kg  = scale.get_units(5);
+  Serial.printf("[Test] HX711              OK (raw=%ld  %.3f kg — etalonner HX711_SCALE)\n",
+                raw, kg);
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Initialise le bus I2C, les capteurs et le HX711
+// @note   Appelé dans setup() avant runPeripheralTests()
+// ---------------------------------------------------------------------------*
+void initSensors()
+{
+  Wire.begin(I2C_PIN_SDA, I2C_PIN_SCL);
+  Wire.setClock(50000);    // 50 kHz — réduit pour diagnostic
+  delay(500);              // attente stabilisation alimentation des modules
+  Serial.printf("[I2C] Bus initialise (SDA=GPIO%d, SCL=GPIO%d, 100kHz)\n",
+                I2C_PIN_SDA, I2C_PIN_SCL);
+
+  // Diagnostic : les lignes doivent être HIGH au repos (pull-ups requis)
+  bool sdaHigh = digitalRead(I2C_PIN_SDA);
+  bool sclHigh = digitalRead(I2C_PIN_SCL);
+  Serial.printf("[I2C] SDA=%s  SCL=%s",
+                sdaHigh ? "HIGH" : "LOW (pull-up manquant?)",
+                sclHigh ? "HIGH" : "LOW (pull-up manquant?)");
+  if (!sdaHigh || !sclHigh)
+    Serial.print("  -> Ajoutez 4.7k entre SDA/SCL et 3.3V");
+  Serial.println();
+
+  scanI2C();
+
+  scale.begin(HX711_PIN_DOUT, HX711_PIN_SCK);
+  scale.set_scale(HX711_SCALE);
+  scale.tare();
+  Serial.printf("[HX711] Balance 1 initialisee (DOUT=GPIO%d, SCK=GPIO%d, scale=%.1f)\n",
+                HX711_PIN_DOUT, HX711_PIN_SCK, HX711_SCALE);
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Scanne le bus I2C et affiche les périphériques détectés
+// @note   Appelé après Wire.begin() — aide au diagnostic de câblage
+// ---------------------------------------------------------------------------*
+void scanI2C()
+{
+  struct { uint8_t addr; const char* label; } known[] =
+  {
+    { I2C_ADDR_DS3231, "DS3231 RTC"     },
+    { I2C_ADDR_EEPROM, "AT24C32 EEPROM" },
+    { I2C_ADDR_BME280, "BME280"         },
+    { I2C_ADDR_LUX,    "MAX44009"       },
+    { I2C_ADDR_INA219, "INA219"         },
+    { 0x00, nullptr }
+  };
+
+  Serial.println("[I2C] Scan du bus I2C :");
+  Serial.println("[I2C] +---------+----------------------+");
+  Serial.println("[I2C] | Adresse | Peripherique         |");
+  Serial.println("[I2C] +---------+----------------------+");
+  uint8_t found = 0;
+
+  for (uint8_t addr = 0x01; addr < 0x7F; addr++)
+  {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0)
+    {
+      const char* label = "inconnu";
+      for (uint8_t i = 0; known[i].label != nullptr; i++)
+      {
+        if (known[i].addr == addr) { label = known[i].label; break; }
+      }
+      Serial.printf("[I2C] |  0x%02X   | %-20s |\n", addr, label);
+      found++;
+    }
+  }
+
+  Serial.println("[I2C] +---------+----------------------+");
+  if (found == 0)
+    Serial.println("[I2C] Aucun peripherique detecte — verifiez SDA/SCL et alimentation");
+  else
+    Serial.printf("[I2C] %u peripherique(s) trouve(s)\n", found);
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Lit tous les capteurs I2C et remplit un NodeData
+// @param  node  Structure à remplir
+// @note   vsol_v calculé depuis l'heure DS3231 (modèle jour/nuit)
+// ---------------------------------------------------------------------------*
+void readSensors(NodeData& node)
+{
+  node.rucher_id = RUCHER_ID;
+  node.temp_c    = bme.readTemperature();
+  node.hum_pct   = bme.readHumidity();
+
+  float lux = max44009ReadLux();
+  node.lux = (lux >= 0.0f) ? (uint16_t)lux : 0;
+
+  node.vbat_v  = ina219.getBusVoltage_V();
+  node.vsol_v  = computeVsol();   // modèle horaire via DS3231
+
+  // Balance 1 — HX711 local
+  node.poids1_kg = scale.is_ready() ? scale.get_units(5) : 0.0f;
+
+  // Balances 2, 3, 4 — Bluetooth (non implémenté, valeurs simulées)
+  node.poids2_kg = 15.0f + random(-100, 101) / 100.0f;
+  node.poids3_kg = 20.0f + random(-100, 101) / 100.0f;
+  node.poids4_kg = 25.0f + random(-100, 101) / 100.0f;
+}
+
+// ---------------------------------------------------------------------------*
 // @brief  Lance tous les tests périphériques et affiche le bilan
 // @note   Un échec n'arrête pas le boot — le bilan est affiché sur le port série
 // @note   LED verte 1 s si tout OK, rouge clignotant 3 × si au moins un échec
@@ -190,6 +421,11 @@ void runPeripheralTests()
 
   testLed()     ? passed++ : failed++;
   testRN2483()  ? passed++ : failed++;
+  testDS3231()  ? passed++ : failed++;
+  testBME280()  ? passed++ : failed++;
+  testMAX44009() ? passed++ : failed++;
+  testINA219()  ? passed++ : failed++;
+  testHX711()   ? passed++ : failed++;
 
   Serial.println("------------------------------------------------------------");
   Serial.printf("  Bilan : %d OK  %d ECHEC\n", passed, failed);
@@ -439,18 +675,14 @@ void sendPayload(const NodeData& node)
 }
 
 // ---------------------------------------------------------------------------*
-// @brief  Calcule la tension du panneau solaire selon l'heure locale de l'ESP
+// @brief  Calcule la tension du panneau solaire selon l'heure DS3231
 // @return float  0.0V (nuit), 6.0V (jour), transition linéaire matin/soir
 // @note   Transitions : montée 05h00→08h00, descente 20h00→22h00
-// @note   Retourne 0.0V si l'horloge ESP n'est pas synchronisée
 // ---------------------------------------------------------------------------*
 float computeVsol()
 {
-  struct tm timeInfo;
-  if (!getLocalTime(&timeInfo))
-    return 0.0f;
-
-  float h = timeInfo.tm_hour + timeInfo.tm_min / 60.0f;
+  DateTime now = rtc.now();
+  float h = now.hour() + now.minute() / 60.0f;
 
   if (h < 5.0f || h >= 22.0f)
     return 0.0f;                                  // nuit
@@ -467,25 +699,16 @@ float computeVsol()
 void setup()
 {
   bootWait();             // attente 10s + affichage infos de compilation
-  runPeripheralTests();   // test LED et RN2483 avant jointure
+  initSensors();          // bus I2C + HX711
+  randomSeed(esp_random()); // graine pour balances BT simulées (2/3/4)
+  runPeripheralTests();   // test LED, RN2483 et capteurs I2C
   initLoRa();             // lecture DevEUI + lookup clés + jointure OTAA
-  randomSeed(esp_random());  // graine matérielle pour les valeurs de test
 }
 
 void loop()
 {
-  NodeData node    = {};
-  node.rucher_id   = 42;
-  node.temp_c      = temperatureRead();                    // capteur interne ESP32-S3
-  node.hum_pct     = random(2000, 9501)  / 100.0f;        // 20.00 – 95.00 %
-  node.lux         = (uint16_t)random(0, 5001);           // 0     – 5000 lux
-  node.vbat_v      = random(270,  421)   / 100.0f;        // 2.70  – 4.20 V
-  node.vsol_v      = computeVsol();                       // 0–6V selon heure locale ESP
-  node.poids1_kg   = 10.0f + random(-100, 101) / 100.0f;  // 10 kg ± 1 kg
-  node.poids2_kg   = 15.0f + random(-100, 101) / 100.0f;  // 15 kg ± 1 kg
-  node.poids3_kg   = 20.0f + random(-100, 101) / 100.0f;  // 20 kg ± 1 kg
-  node.poids4_kg   = 25.0f + random(-100, 101) / 100.0f;  // 25 kg ± 1 kg
-
+  NodeData node = {};
+  readSensors(node);
   sendPayload(node);
   delay(SEND_INTERVAL_MS);
 }
