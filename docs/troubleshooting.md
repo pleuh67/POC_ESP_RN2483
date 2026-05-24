@@ -46,7 +46,7 @@
 
 - Dans Orange Live Objects, vérifiez l'onglet **Messages** du device (et non la page d'accueil).
 - Le port applicatif est fixé à `1` par la librairie rn2xx3 (hardcodé dans `txCommand`).
-- Attendez au moins 60 secondes entre deux trames (duty cycle).
+- Attendez au moins 5 minutes entre deux trames (paramètre `INTERVAL_PAYLOAD` dans `config.h`).
 - Vérifiez le RSSI affiché dans les messages : en dessous de -120 dBm, le signal est très faible.
 
 ---
@@ -63,7 +63,7 @@
 | Cause | Vérification |
 |---|---|
 | Déconnexion du réseau | Le module peut se déconnecter après un long silence — un re-join peut être nécessaire |
-| Duty cycle dépassé | Augmentez `SEND_INTERVAL_MS` dans `config.h` |
+| Duty cycle dépassé | Augmentez `INTERVAL_PAYLOAD` dans `config.h` |
 | Signal trop faible | Approchez-vous d'une zone couverte ou réduisez le Spreading Factor |
 
 ---
@@ -79,6 +79,29 @@
   # puis déconnectez/reconnectez la session
   ```
 - Sur Windows : vérifiez le numéro de port COM dans le Gestionnaire de périphériques.
+
+---
+
+## Rien ne s'affiche sur le port série (LED de boot OK)
+
+**Cause probable : port USB natif utilisé sans USB CDC activé.**
+
+L'ESP32-S3-DevKitC-1 dispose de deux ports USB :
+
+| Port         | Puce          | Flag requis                      |
+|--------------|---------------|----------------------------------|
+| `COM` (UART) | CH340 / CP210x | aucun                           |
+| `USB` (natif)| ESP32-S3 USB  | `-DARDUINO_USB_CDC_ON_BOOT=1`   |
+
+Si vous utilisez le port `USB` natif (côté LED RGB), ajoutez dans `platformio.ini` :
+
+```ini
+build_flags =
+  -DARDUINO_USB_CDC_ON_BOOT=1   ; Serial → USB CDC (port USB natif ESP32-S3)
+  -DARDUINO_USB_MODE=1           ; mode USB CDC
+```
+
+Après flashage, un nouveau port COM apparaît dans le Gestionnaire de périphériques — ouvrez celui-ci à 115200.
 
 ---
 

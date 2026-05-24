@@ -336,61 +336,61 @@ void initLoRa()
 }
 
 // ---------------------------------------------------------------------------*
-// @brief  Encode et envoie un NodeData sur LoRaWAN (19 octets, big-endian)
+// @brief  Encode et envoie un NodeData sur LoRaWAN (19 octets, little-endian)
 // @param  node  Données du nœud à transmettre
 // @note   TX non confirmé, port 1 (hardcodé dans la librairie rn2xx3)
-// @note   Format : temp(2) hum(2) poids×4(8) vbat(2) vsol(2) lux(2) rucherID(1)
+// @note   Format : rucherID(1) temp(2) hum(2) lux(2) vbat(2) vsol(2) poids×4(8)
 // ---------------------------------------------------------------------------*
 void sendPayload(const NodeData& node)
 {
   uint8_t buf[NODE_PAYLOAD_BYTES];
 
-  // Octets 0-1 : Température DHT22 (int16 ×100)
+  // Octet 0 : RucherID (uint8)
+  buf[0] = node.rucher_id;
+
+  // Octets 1-2 : Température DHT22 (int16 ×100, little-endian)
   int16_t temp = (int16_t)(node.temp_c * 100.0f);
-  buf[0] = (temp >> 8) & 0xFF;
-  buf[1] =  temp        & 0xFF;
+  buf[1] =  temp       & 0xFF;
+  buf[2] = (temp >> 8) & 0xFF;
 
-  // Octets 2-3 : Humidité DHT22 (uint16 ×100)
+  // Octets 3-4 : Humidité DHT22 (uint16 ×100, little-endian)
   uint16_t hum = (uint16_t)(node.hum_pct * 100.0f);
-  buf[2] = (hum >> 8) & 0xFF;
-  buf[3] =  hum        & 0xFF;
+  buf[3] =  hum       & 0xFF;
+  buf[4] = (hum >> 8) & 0xFF;
 
-  // Octets 4-5 : Poids Balance 1 (int16 ×100)
-  int16_t p1 = (int16_t)(node.poids1_kg * 100.0f);
-  buf[4] = (p1 >> 8) & 0xFF;
-  buf[5] =  p1        & 0xFF;
+  // Octets 5-6 : Luminosité (uint16, little-endian)
+  buf[5] =  node.lux       & 0xFF;
+  buf[6] = (node.lux >> 8) & 0xFF;
 
-  // Octets 6-7 : Poids Balance 2 (int16 ×100)
-  int16_t p2 = (int16_t)(node.poids2_kg * 100.0f);
-  buf[6] = (p2 >> 8) & 0xFF;
-  buf[7] =  p2        & 0xFF;
-
-  // Octets 8-9 : Poids Balance 3 (int16 ×100)
-  int16_t p3 = (int16_t)(node.poids3_kg * 100.0f);
-  buf[8]  = (p3 >> 8) & 0xFF;
-  buf[9]  =  p3        & 0xFF;
-
-  // Octets 10-11 : Poids Balance 4 (int16 ×100)
-  int16_t p4 = (int16_t)(node.poids4_kg * 100.0f);
-  buf[10] = (p4 >> 8) & 0xFF;
-  buf[11] =  p4        & 0xFF;
-
-  // Octets 12-13 : Tension batterie (uint16 ×100)
+  // Octets 7-8 : Tension batterie (uint16 ×100, little-endian)
   uint16_t vbat = (uint16_t)(node.vbat_v * 100.0f);
-  buf[12] = (vbat >> 8) & 0xFF;
-  buf[13] =  vbat        & 0xFF;
+  buf[7] =  vbat       & 0xFF;
+  buf[8] = (vbat >> 8) & 0xFF;
 
-  // Octets 14-15 : Tension solaire (uint16 ×100)
+  // Octets 9-10 : Tension solaire (uint16 ×100, little-endian)
   uint16_t vsol = (uint16_t)(node.vsol_v * 100.0f);
-  buf[14] = (vsol >> 8) & 0xFF;
-  buf[15] =  vsol        & 0xFF;
+  buf[9]  =  vsol       & 0xFF;
+  buf[10] = (vsol >> 8) & 0xFF;
 
-  // Octets 16-17 : Luminosité (uint16)
-  buf[16] = (node.lux >> 8) & 0xFF;
-  buf[17] =  node.lux        & 0xFF;
+  // Octets 11-12 : Poids Balance 1 (int16 ×100, little-endian)
+  int16_t p1 = (int16_t)(node.poids1_kg * 100.0f);
+  buf[11] =  p1       & 0xFF;
+  buf[12] = (p1 >> 8) & 0xFF;
 
-  // Octet 18 : RucherID (uint8)
-  buf[18] = node.rucher_id;
+  // Octets 13-14 : Poids Balance 2 (int16 ×100, little-endian)
+  int16_t p2 = (int16_t)(node.poids2_kg * 100.0f);
+  buf[13] =  p2       & 0xFF;
+  buf[14] = (p2 >> 8) & 0xFF;
+
+  // Octets 15-16 : Poids Balance 3 (int16 ×100, little-endian)
+  int16_t p3 = (int16_t)(node.poids3_kg * 100.0f);
+  buf[15] =  p3       & 0xFF;
+  buf[16] = (p3 >> 8) & 0xFF;
+
+  // Octets 17-18 : Poids Balance 4 (int16 ×100, little-endian)
+  int16_t p4 = (int16_t)(node.poids4_kg * 100.0f);
+  buf[17] =  p4       & 0xFF;
+  buf[18] = (p4 >> 8) & 0xFF;
 
   // Conversion en chaîne hexadécimale pour txCommand
   char hexStr[NODE_PAYLOAD_BYTES * 2 + 1];
@@ -401,6 +401,16 @@ void sendPayload(const NodeData& node)
 
   Serial.printf("[LoRa] Envoi %d octets : %s (module=%s)\n",
                 NODE_PAYLOAD_BYTES, hexStr, g_label.c_str());
+  Serial.printf("       RucherID : %u\n",       node.rucher_id);
+  Serial.printf("       Temp     : %.2f C\n",  node.temp_c);
+  Serial.printf("       Hum      : %.2f %%\n", node.hum_pct);
+  Serial.printf("       Lux      : %u lux\n",  node.lux);
+  Serial.printf("       Vbat     : %.2f V\n",  node.vbat_v);
+  Serial.printf("       Vsol     : %.2f V\n",  node.vsol_v);
+  Serial.printf("       Poids 1  : %.2f kg\n", node.poids1_kg);
+  Serial.printf("       Poids 2  : %.2f kg\n", node.poids2_kg);
+  Serial.printf("       Poids 3  : %.2f kg\n", node.poids3_kg);
+  Serial.printf("       Poids 4  : %.2f kg\n", node.poids4_kg);
 
   ledSet(60, 60, 60);   // LED blanche courte : envoi en cours
 
@@ -428,6 +438,29 @@ void sendPayload(const NodeData& node)
   }
 }
 
+// ---------------------------------------------------------------------------*
+// @brief  Calcule la tension du panneau solaire selon l'heure locale de l'ESP
+// @return float  0.0V (nuit), 6.0V (jour), transition linéaire matin/soir
+// @note   Transitions : montée 05h00→08h00, descente 20h00→22h00
+// @note   Retourne 0.0V si l'horloge ESP n'est pas synchronisée
+// ---------------------------------------------------------------------------*
+float computeVsol()
+{
+  struct tm timeInfo;
+  if (!getLocalTime(&timeInfo))
+    return 0.0f;
+
+  float h = timeInfo.tm_hour + timeInfo.tm_min / 60.0f;
+
+  if (h < 5.0f || h >= 22.0f)
+    return 0.0f;                                  // nuit
+  if (h >= 8.0f && h < 20.0f)
+    return 6.0f;                                  // plein jour
+  if (h < 8.0f)
+    return 6.0f * (h - 5.0f) / 3.0f;             // montée  05h→08h
+  return 6.0f * (1.0f - (h - 20.0f) / 2.0f);    // descente 20h→22h
+}
+
 // ============================================================
 // Setup & Loop
 // ============================================================
@@ -436,12 +469,22 @@ void setup()
   bootWait();             // attente 10s + affichage infos de compilation
   runPeripheralTests();   // test LED et RN2483 avant jointure
   initLoRa();             // lecture DevEUI + lookup clés + jointure OTAA
+  randomSeed(esp_random());  // graine matérielle pour les valeurs de test
 }
 
 void loop()
 {
-  NodeData node     = {};   // zéros — à remplacer par les lectures capteurs réels
-  node.rucher_id    = 1;
+  NodeData node    = {};
+  node.rucher_id   = 42;
+  node.temp_c      = temperatureRead();                    // capteur interne ESP32-S3
+  node.hum_pct     = random(2000, 9501)  / 100.0f;        // 20.00 – 95.00 %
+  node.lux         = (uint16_t)random(0, 5001);           // 0     – 5000 lux
+  node.vbat_v      = random(270,  421)   / 100.0f;        // 2.70  – 4.20 V
+  node.vsol_v      = computeVsol();                       // 0–6V selon heure locale ESP
+  node.poids1_kg   = 10.0f + random(-100, 101) / 100.0f;  // 10 kg ± 1 kg
+  node.poids2_kg   = 15.0f + random(-100, 101) / 100.0f;  // 15 kg ± 1 kg
+  node.poids3_kg   = 20.0f + random(-100, 101) / 100.0f;  // 20 kg ± 1 kg
+  node.poids4_kg   = 25.0f + random(-100, 101) / 100.0f;  // 25 kg ± 1 kg
 
   sendPayload(node);
   delay(SEND_INTERVAL_MS);
