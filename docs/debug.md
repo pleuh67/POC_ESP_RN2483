@@ -25,3 +25,55 @@ Les constantes de couleur et de durée sont définies dans `include/config.h`.
 | `ledSet(r,g,b)` | Applique une couleur RGB à la LED WS2812  |
 | `ledOff()`      | Éteint la LED                             |
 | `testLed()`     | Cycle rouge/vert/bleu au boot (vérification visuelle) |
+
+---
+
+## Affichage des mesures en temps réel
+
+Toutes les `MEASURE_INTERVAL_MS` (défaut 10 s), une ligne est affichée :
+
+```
+[DATA] R:42 | T:+23.4C H:61.2% Lux: 320 | Vbat:3.82V Vsol:4.20V | P1: 18.35kg P2: 15.12kg P3: 20.05kg P4: 25.01kg
+```
+
+| Champ | Signification |
+|-------|---------------|
+| `R`   | RucherID |
+| `T`   | Température BME280 (°C) |
+| `H`   | Humidité BME280 (%) |
+| `Lux` | Luminosité MAX44009 (lux) |
+| `Vbat`| Tension batterie INA219 (V) |
+| `Vsol`| Tension solaire calculée DS3231 (V) |
+| `P1–P4` | Poids balances (kg) — P1 HX711, P2/3/4 simulées |
+
+Modifier `MEASURE_INTERVAL_MS` dans `config.h` pour changer la fréquence.
+
+---
+
+## Commandes série
+
+Taper dans le terminal PlatformIO pendant l'exécution :
+
+| Commande | Action |
+|----------|--------|
+| `c` + Entrée | Lance la calibration HX711 (2 points) |
+| `?` + Entrée | Affiche la liste des commandes disponibles |
+
+### Procédure de calibration HX711
+
+```
+c  ← taper dans le terminal
+  Etape 1/2 : balance a VIDE
+  -> Retirez tout poids, puis appuyez sur Entree...
+                          ← Entrée
+  Tare OK  - valeur brute a vide : 84320
+
+  Etape 2/2 : posez 2.50 kg sur la balance
+  -> Poids en place, appuyez sur Entree...
+                          ← Entrée
+  Nouveau scale : 41920.00
+  -> Mettez a jour HX711_SCALE dans include/config.h :
+     #define HX711_SCALE  41920.00f
+```
+
+Reporter la valeur `HX711_SCALE` dans `include/config.h` et recompiler.

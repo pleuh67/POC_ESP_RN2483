@@ -33,10 +33,13 @@ bool  testRN2483();                              // Autobaud + firmware + DevEUI
 bool  testDS3231();                              // Présence + lecture date/heure
 bool  testBME280();                              // Présence + lecture temp/hum/pression
 float max44009ReadLux();                         // Lecture directe I2C MAX44009 (lux)
+void  calibrateHX711();                          // Calibration 2 points : tare + 2.5 kg
 bool  testMAX44009();                            // Présence + lecture luminosité
 bool  testINA219();                              // Présence + lecture tension/courant
 bool  testHX711();                               // Présence + valeur brute + kg
 void  runPeripheralTests();                      // Lance tous les tests, affiche bilan
 
 // ── LoRaWAN ──────────────────────────────────────────────────
+void  handleSerial();                            // Interpréteur commandes série (c, ?)
+void  printMeasures(const NodeData& node);       // Affiche les mesures sur une ligne
 void  sendPayload(const NodeData& node);         // Encode et envoie 19 octets (LE)

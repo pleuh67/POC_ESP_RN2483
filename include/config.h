@@ -44,7 +44,9 @@
 // Broches HX711 — Balance 1 (connectée directement à l'ESP32-S3)
 #define HX711_PIN_DOUT  10   // GPIO10 — données HX711
 #define HX711_PIN_SCK   11   // GPIO11 — horloge HX711
-#define HX711_SCALE     420.0f  // facteur d'étalonnage (à ajuster par pesée)
+#define HX711_SCALE   -1044326.38f  // facteur d'étalonnage   (mis à jour par calibrateHX711())
+#define HX711_OFFSET          0L    // offset tare à vide      (mis à jour par calibrateHX711())
+#define HX711_CALIB_KG        2.5f  // poids de référence pour la calibration (kg)
 
 // Adresses I2C des périphériques
 #define I2C_ADDR_DS3231   0x68  // RTC temps réel
@@ -56,14 +58,29 @@
 // ============================================================
 // Paramètres d'envoi
 // ============================================================
-#define INTERVAL_PAYLOAD  5                             // Intervalle d'envoi en minutes
-#define SEND_INTERVAL_MS  (INTERVAL_PAYLOAD * 60000UL) // Converti en ms pour delay()
+#define INTERVAL_PAYLOAD     5                              // Intervalle d'envoi LoRa en minutes
+#define SEND_INTERVAL_MS     (INTERVAL_PAYLOAD * 60000UL)  // Converti en ms
+#define MEASURE_INTERVAL_MS  10000UL                        // Affichage terminal (dev)
 // Note : le port LoRaWAN est hardcodé à 1 dans la librairie rn2xx3 (txCommand "mac tx uncnf 1")
 
 // ============================================================
-// Identifiant du rucher (à adapter par installation)
+// Valeurs par défaut de NodeConfig
+// Utilisées si l'EEPROM est vierge, corrompue ou absente.
+// En mode développement : modifier ici, puis recalibrer et sauver en EEPROM.
 // ============================================================
-#define RUCHER_ID  42    // Identifiant rucher envoyé dans le payload (0-255)
+#define DEFAULT_RUCHER_ID          42         // Identifiant rucher (0-255)
+#define DEFAULT_LABEL              "RUCHE_01" // Nom du nœud
+#define DEFAULT_HX711_SCALE        -1044326.38f // Facteur étalonnage HX711
+#define DEFAULT_HX711_OFFSET       0L         // Offset tare HX711 à vide
+#define DEFAULT_VBAT_FACTOR        1.0f       // Correctif tension batterie INA219
+#define DEFAULT_VSOL_FACTOR        1.0f       // Correctif tension solaire ADC
+#define DEFAULT_SEND_INTERVAL_MIN  5          // Intervalle envoi LoRa (minutes)
+
+// Alias pour compatibilité avec le code existant
+#define RUCHER_ID          DEFAULT_RUCHER_ID
+#define HX711_SCALE        DEFAULT_HX711_SCALE
+#define HX711_OFFSET       DEFAULT_HX711_OFFSET
+#define INTERVAL_PAYLOAD   DEFAULT_SEND_INTERVAL_MIN
 
 // ============================================================
 // Debug

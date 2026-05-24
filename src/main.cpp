@@ -329,10 +329,10 @@ void initSensors()
   scanI2C();
 
   scale.begin(HX711_PIN_DOUT, HX711_PIN_SCK);
-  scale.set_scale(HX711_SCALE);
-  scale.tare();
-  Serial.printf("[HX711] Balance 1 initialisee (DOUT=GPIO%d, SCK=GPIO%d, scale=%.1f)\n",
-                HX711_PIN_DOUT, HX711_PIN_SCK, HX711_SCALE);
+  scale.set_scale(HX711_SCALE);    // pas de tare : la balance est en charge au démarrage
+  scale.set_offset(HX711_OFFSET);  // offset de zéro issu de la calibration
+  Serial.printf("[HX711] Balance 1 initialisee (DOUT=GPIO%d, SCK=GPIO%d, scale=%.1f, offset=%ld)\n",
+                HX711_PIN_DOUT, HX711_PIN_SCK, HX711_SCALE, (long)HX711_OFFSET);
 }
 
 // ---------------------------------------------------------------------------*
@@ -693,6 +693,66 @@ float computeVsol()
   return 6.0f * (1.0f - (h - 20.0f) / 2.0f);    // descente 20h→22h
 }
 
+// ---------------------------------------------------------------------------*
+// @brief  Calibration HX711 en deux points : tare (0 kg) + poids de référence
+// @note   Mesure 10 échantillons à chaque étape — résultat à reporter dans config.h
+// @note   Attend une saisie clavier entre les deux étapes
+// ---------------------------------------------------------------------------*
+void calibrateHX711()
+{
+  Serial.println();
+  Serial.println("============================================================");
+  Serial.println("  CALIBRATION HX711 - Balance 1");
+  Serial.println("============================================================");
+
+  // ── Étape 1 : tare à vide ─────────────────────────────────
+  Serial.println("  Etape 1/2 : balance a VIDE");
+  Serial.println("  -> Retirez tout poids, puis appuyez sur Entree...");
+  while (!Serial.available()) { delay(10); }
+  while (Serial.available())  { Serial.read(); }
+
+  scale.set_scale();
+  scale.tare(10);
+  long rawTare = scale.get_offset();
+  Serial.printf("  Tare OK  - valeur brute a vide : %ld\n", rawTare);
+
+  // ── Étape 2 : poids de référence ──────────────────────────
+  Serial.printf("  Etape 2/2 : posez %.2f kg sur la balance\n", HX711_CALIB_KG);
+  Serial.println("  -> Poids en place, appuyez sur Entree...");
+  while (!Serial.available()) { delay(10); }
+  while (Serial.available())  { Serial.read(); }
+
+  long  rawCharge = scale.read_average(10);
+  float newScale  = (float)(rawCharge - rawTare) / HX711_CALIB_KG;
+  scale.set_scale(newScale);
+
+  Serial.println("------------------------------------------------------------");
+  Serial.printf("  Tare          : %ld\n",   rawTare);
+  Serial.printf("  Brut charge   : %ld\n",   rawCharge);
+  Serial.printf("  Nouveau scale : %.2f\n",  newScale);
+  Serial.printf("  Verification  : %.3f kg (doit etre %.2f kg)\n",
+                scale.get_units(5), HX711_CALIB_KG);
+  Serial.println("------------------------------------------------------------");
+  Serial.println("  -> Mettez a jour dans include/config.h :");
+  Serial.printf( "     #define HX711_SCALE   %.2ff\n", newScale);
+  Serial.printf( "     #define HX711_OFFSET  %ldL\n",  rawTare);
+  Serial.println("============================================================");
+  Serial.println();
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Affiche toutes les mesures sur une ligne formatée dans le terminal
+// @param  node  Données à afficher
+// ---------------------------------------------------------------------------*
+void printMeasures(const NodeData& node)
+{
+  Serial.printf("[DATA] R:%u | T:%+.1fC H:%.1f%% Lux:%4u | Vbat:%.2fV Vsol:%.2fV | P1:%6.2fkg P2:%6.2fkg P3:%6.2fkg P4:%6.2fkg\n",
+                node.rucher_id,
+                node.temp_c, node.hum_pct, node.lux,
+                node.vbat_v, node.vsol_v,
+                node.poids1_kg, node.poids2_kg, node.poids3_kg, node.poids4_kg);
+}
+
 // ============================================================
 // Setup & Loop
 // ============================================================
@@ -705,10 +765,52 @@ void setup()
   initLoRa();             // lecture DevEUI + lookup clés + jointure OTAA
 }
 
+// ---------------------------------------------------------------------------*
+// @brief  Traite les commandes reçues sur le port série
+// @note   'c' → calibration HX711   '?' → aide
+// ---------------------------------------------------------------------------*
+void handleSerial()
+{
+  if (!Serial.available())
+    return;
+
+  char cmd = Serial.read();
+  while (Serial.available()) Serial.read();   // vide le buffer
+
+  switch (cmd)
+  {
+    case 'c': case 'C':
+      calibrateHX711();
+      break;
+    case '?':
+      Serial.println("[CMD] Commandes disponibles :");
+      Serial.println("[CMD]   c  -> calibration HX711 (2 points)");
+      Serial.println("[CMD]   ?  -> cette aide");
+      break;
+    default:
+      break;
+  }
+}
+
 void loop()
 {
-  NodeData node = {};
-  readSensors(node);
-  sendPayload(node);
-  delay(SEND_INTERVAL_MS);
+  static uint32_t lastMeasure = 0;
+  static uint32_t lastSend    = 0;
+  uint32_t now = millis();
+
+  handleSerial();
+
+  if (now - lastMeasure >= MEASURE_INTERVAL_MS)
+  {
+    lastMeasure = now;
+    NodeData node = {};
+    readSensors(node);
+    printMeasures(node);
+
+    if (now - lastSend >= SEND_INTERVAL_MS)
+    {
+      lastSend = now;
+      sendPayload(node);
+    }
+  }
 }
