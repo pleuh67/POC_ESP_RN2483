@@ -18,6 +18,8 @@
 #include "functions.h"
 #include "secret.h"   // table des modules + clés OTAA - non commité sur git
 #include <I2C_eeprom.h>
+#include <BH1750.h>
+#include <Adafruit_SH110X.h>
 
 // ============================================================
 // Objets globaux
@@ -33,6 +35,16 @@ Adafruit_INA219    ina219(I2C_ADDR_INA219);        // 0x40 — tension / courant
 
 // Balance 1 — HX711 (GPIO10/11)
 HX711              scale;
+
+// Capteur de luminosité détecté au boot
+enum LuxSensor { LUX_NONE, LUX_BH1750, LUX_MAX44009 };
+LuxSensor          g_luxSensor = LUX_NONE;
+BH1750             bh1750;
+
+// OLED SH1106 128×64 — log de démarrage et affichage d'erreurs
+Adafruit_SH1106G   oled(128, 64, &Wire, -1);       // SDA/SCL partagés, pas de RST
+static char        g_oledBuf[OLED_ROWS][OLED_COLS + 1];
+static bool        g_oledReady = false;
 
 // EEPROM AT24C32 (0x57) — config persistante
 I2C_eeprom         eeprom(I2C_ADDR_EEPROM, 4096);
@@ -64,6 +76,56 @@ void ledSet(uint8_t r, uint8_t g, uint8_t b)
 void ledOff()
 {
   ledSet(0, 0, 0);
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Initialise l'écran OLED SH1106 — tente 0x3C puis 0x3D
+// @note   Appelé depuis initSensors() après Wire.begin()
+// ---------------------------------------------------------------------------*
+void oledInit()
+{
+  if (!oled.begin(I2C_ADDR_OLED, false) && !oled.begin(0x3D, false))
+  {
+    Serial.println("[OLED] ATTENTION : ecran non detecte (0x3C et 0x3D essayes)");
+    return;
+  }
+  g_oledReady = true;
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(SH110X_WHITE);
+  oled.setTextWrap(false);
+  memset(g_oledBuf, 0, sizeof(g_oledBuf));
+  oled.display();
+  Serial.println("[OLED] Initialise OK");
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Ajoute une ligne au scroll OLED (printf-style, max OLED_COLS chars)
+// @note   Toujours actif — permet de voir les erreurs sans port série
+// ---------------------------------------------------------------------------*
+void oledAddLine(const char* fmt, ...)
+{
+  char line[OLED_COLS + 1];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(line, sizeof(line), fmt, args);
+  va_end(args);
+
+  if (!g_oledReady) return;
+
+  // Scroll vers le haut
+  for (uint8_t i = 0; i < OLED_ROWS - 1; i++)
+    memcpy(g_oledBuf[i], g_oledBuf[i + 1], sizeof(g_oledBuf[0]));
+  strncpy(g_oledBuf[OLED_ROWS - 1], line, OLED_COLS);
+  g_oledBuf[OLED_ROWS - 1][OLED_COLS] = '\0';
+
+  oled.clearDisplay();
+  for (uint8_t i = 0; i < OLED_ROWS; i++)
+  {
+    oled.setCursor(0, i * 8);
+    oled.print(g_oledBuf[i]);
+  }
+  oled.display();
 }
 
 // ---------------------------------------------------------------------------*
@@ -258,19 +320,35 @@ float max44009ReadLux()
 }
 
 // ---------------------------------------------------------------------------*
-// @brief  Test MAX44009 : vérifie la présence et lit la luminosité
-// @return bool  True si le capteur répond
+// @brief  Lit la luminosité via le capteur détecté au boot (BH1750 ou MAX44009)
+// @return float  Luminosité en lux, ou -1.0 si aucun capteur disponible
 // ---------------------------------------------------------------------------*
-bool testMAX44009()
+float readLux()
 {
-  Serial.println("[Test] MAX44009...");
-  float lux = max44009ReadLux();
+  switch (g_luxSensor)
+  {
+    case LUX_BH1750:   return bh1750.readLightLevel();
+    case LUX_MAX44009: return max44009ReadLux();
+    default:           return -1.0f;
+  }
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Test du capteur de luminosité détecté (BH1750 ou MAX44009)
+// @return bool  True si une mesure valide est obtenue
+// ---------------------------------------------------------------------------*
+bool testLuxSensor()
+{
+  const char* name = (g_luxSensor == LUX_BH1750) ? "BH1750" : "MAX44009";
+  Serial.printf("[Test] %s...\n", name);
+
+  float lux = readLux();
   if (lux < 0.0f)
   {
-    Serial.printf("[Test] MAX44009            ECHEC (non detecte sur 0x%02X)\n", I2C_ADDR_LUX);
+    Serial.printf("[Test] %-10s          ECHEC (aucun capteur detecte)\n", name);
     return false;
   }
-  Serial.printf("[Test] MAX44009            OK (%.1f lux)\n", lux);
+  Serial.printf("[Test] %-10s          OK (%.1f lux)\n", name, lux);
   return true;
 }
 
@@ -360,6 +438,7 @@ bool loadConfig()
   if (!eeprom.begin())
   {
     Serial.println("[Config] EEPROM absente — valeurs par defaut appliquees");
+    oledAddLine("EEPROM absent!");
     initDefaultConfig();
     return false;
   }
@@ -371,10 +450,12 @@ bool loadConfig()
   {
     Serial.printf("[Config] CRC invalide (lu=0x%08X calc=0x%08X) — valeurs par defaut\n",
                   g_config.crc, expected);
+    oledAddLine("EEPROM CRC FAIL");
     initDefaultConfig();
     return false;
   }
 
+  oledAddLine("EEPROM OK");
   Serial.println("------------------------------------------------------------");
   Serial.println("  CONFIG EEPROM OK");
   Serial.println("------------------------------------------------------------");
@@ -430,14 +511,61 @@ void initSensors()
     Serial.print("  -> Ajoutez 4.7k entre SDA/SCL et 3.3V");
   Serial.println();
 
-  scanI2C();
-  loadConfig();   // charge g_config depuis EEPROM (ou valeurs par défaut)
+  scanI2C();       // scan avant toute init — garantit la détection de tous les périphériques
+  oledInit();      // init OLED après le scan
+  oledAddLine("POC ESP RN2483");
+  loadConfig();    // charge g_config depuis EEPROM (ou valeurs par défaut)
 
   // BME280 — tente 0x76 puis 0x77 (selon câblage broche SDO)
   if (!bme.begin(0x76) && !bme.begin(0x77))
+  {
     Serial.println("[BME280] ATTENTION : capteur non detecte (0x76 et 0x77 essayes)");
+    oledAddLine("BME280 absent!");
+  }
   else
+  {
     Serial.println("[BME280] Initialise OK");
+  }
+
+  // Luminosité — BH1750 prioritaire, fallback MAX44009
+  if (bh1750.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, I2C_ADDR_BH1750_LOW, &Wire))
+  {
+    g_luxSensor = LUX_BH1750;
+    Serial.printf("[LUX] BH1750 detecte (0x%02X)\n", I2C_ADDR_BH1750_LOW);
+  }
+  else if (bh1750.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, I2C_ADDR_BH1750_HIGH, &Wire))
+  {
+    g_luxSensor = LUX_BH1750;
+    Serial.printf("[LUX] BH1750 detecte (0x%02X)\n", I2C_ADDR_BH1750_HIGH);
+  }
+  else if (max44009ReadLux() >= 0.0f)
+  {
+    g_luxSensor = LUX_MAX44009;
+    Serial.printf("[LUX] MAX44009 detecte (0x%02X)\n", I2C_ADDR_MAX44009);
+  }
+  else
+  {
+    g_luxSensor = LUX_NONE;
+    Serial.println("[LUX] ATTENTION : aucun capteur de luminosite detecte");
+    oledAddLine("LUX absent!");
+  }
+
+  // DS3231 — requis avant computeVsol() et rtc.now()
+  if (!rtc.begin())
+    Serial.println("[DS3231] ATTENTION : RTC non detectee sur I2C 0x68");
+  else
+    Serial.println("[DS3231] Initialisee OK");
+
+  // INA219 — requis avant getBusVoltage_V() / getCurrent_mA()
+  if (!ina219.begin())
+  {
+    Serial.println("[INA219] ATTENTION : capteur non detecte sur I2C 0x40");
+    oledAddLine("INA219 absent!");
+  }
+  else
+  {
+    Serial.println("[INA219] Initialisee OK");
+  }
 
   scale.begin(HX711_PIN_DOUT, HX711_PIN_SCK);
   scale.set_scale(g_config.hx711_scale);
@@ -454,10 +582,14 @@ void scanI2C()
 {
   struct { uint8_t addr; const char* label; } known[] =
   {
+    { I2C_ADDR_OLED,   "SH1106 OLED"    },
+    { 0x3D,            "SH1106 OLED"    },
     { I2C_ADDR_DS3231, "DS3231 RTC"     },
     { I2C_ADDR_EEPROM, "AT24C32 EEPROM" },
     { I2C_ADDR_BME280, "BME280"         },
-    { I2C_ADDR_LUX,    "MAX44009"       },
+    { I2C_ADDR_MAX44009,    "MAX44009"       },
+    { I2C_ADDR_BH1750_LOW,  "BH1750 (ADDR=0)" },
+    { I2C_ADDR_BH1750_HIGH, "BH1750 (ADDR=1)" },
     { I2C_ADDR_INA219, "INA219"         },
     { 0x00, nullptr }
   };
@@ -503,7 +635,7 @@ void readSensors(NodeData& node)
   node.temp_c  = isnan(t) ? 0.0f : t;
   node.hum_pct = isnan(h) ? 0.0f : h;
 
-  float lux = max44009ReadLux();
+  float lux = readLux();
   node.lux = (lux >= 0.0f) ? (uint16_t)lux : 0;
 
   node.vbat_v  = ina219.getBusVoltage_V();
@@ -531,14 +663,47 @@ void runPeripheralTests()
 
   uint8_t passed = 0;
   uint8_t failed = 0;
+  bool    ok;
 
-  testLed()     ? passed++ : failed++;
-  testRN2483()  ? passed++ : failed++;
-  testDS3231()  ? passed++ : failed++;
-  testBME280()  ? passed++ : failed++;
-  testMAX44009() ? passed++ : failed++;
-  testINA219()  ? passed++ : failed++;
-  testHX711()   ? passed++ : failed++;
+  ok = testLed();
+  ok ? passed++ : failed++;
+  oledAddLine("LED    %s", ok ? "OK" : "FAIL");
+
+  ok = testRN2483();
+  ok ? passed++ : failed++;
+  oledAddLine("RN2483 %s", ok ? "OK" : "FAIL");
+
+  ok = testDS3231();
+  ok ? passed++ : failed++;
+  if (ok) { DateTime t = rtc.now();
+    oledAddLine("DS3231 %02d:%02d:%02d", t.hour(), t.minute(), t.second()); }
+  else oledAddLine("DS3231 FAIL");
+
+  ok = testBME280();
+  ok ? passed++ : failed++;
+  if (ok)
+    oledAddLine("BME280 %.1fC %.0f%%", bme.readTemperature(), bme.readHumidity());
+  else oledAddLine("BME280 FAIL");
+
+  ok = testLuxSensor();
+  ok ? passed++ : failed++;
+  if (ok)
+    oledAddLine("LUX    %.0f lux", readLux());
+  else oledAddLine("LUX    FAIL");
+
+  ok = testINA219();
+  ok ? passed++ : failed++;
+  if (ok)
+    oledAddLine("INA219 %.2fV", ina219.getBusVoltage_V());
+  else oledAddLine("INA219 FAIL");
+
+  ok = testHX711();
+  ok ? passed++ : failed++;
+  if (ok)
+    oledAddLine("HX711  %.2fkg", scale.get_units(3));
+  else oledAddLine("HX711  FAIL");
+
+  oledAddLine("%d OK  %d FAIL", passed, failed);
 
   Serial.println("------------------------------------------------------------");
   Serial.printf("  Bilan : %d OK  %d ECHEC\n", passed, failed);
@@ -605,6 +770,76 @@ void lookupDevice(const String& hwDeveui)
 }
 
 // ---------------------------------------------------------------------------*
+// @brief  Synchronise le DS3231 depuis l'heure GPS fournie par le réseau LoRaWAN
+// @return bool  True si synchronisation réussie
+// @note   Requiert firmware RN2483 >= 1.0.5 et support DeviceTimeReq côté serveur
+// @note   Conversion : GPS epoch (6 jan 1980) + 315964800 − 18 leap s → Unix UTC
+// ---------------------------------------------------------------------------*
+bool syncRtcFromLoRa()
+{
+  Serial.println("[RTC] Tentative synchro heure via LoRa...");
+
+  String response = myLora.sendRawCommand("mac get gpstime");
+  response.trim();
+  Serial.printf("[RTC] Reponse gpstime : '%s'\n", response.c_str());
+
+  if (response.length() == 0 || response == "0" || response.startsWith("invalid"))
+  {
+    Serial.println("[RTC] GPS non disponible (firmware < 1.0.5 ou reseau non supporté)");
+    oledAddLine("RTC: GPS indispo");
+    return false;
+  }
+
+  uint32_t gpsSeconds = (uint32_t)strtoul(response.c_str(), nullptr, 10);
+
+  // Valeur plausible : > 1er janvier 2023 en temps GPS ≈ 1 356 000 000 s
+  if (gpsSeconds < 1356000000UL)
+  {
+    Serial.printf("[RTC] Valeur GPS hors plage (%lu) — synchro ignoree\n",
+                  (unsigned long)gpsSeconds);
+    oledAddLine("RTC: GPS invalide");
+    return false;
+  }
+
+  // GPS epoch (6 jan 1980) → Unix UTC : +315 964 800 s, −18 leap seconds
+  uint32_t unixLocal = gpsSeconds + 315964800UL - 18UL
+                       + (uint32_t)(TIMEZONE_OFFSET_H * 3600L);
+
+  DateTime dt(unixLocal);
+  rtc.adjust(dt);
+
+  Serial.printf("[RTC] Synchro OK : %04d-%02d-%02d %02d:%02d:%02d (UTC+%d)\n",
+                dt.year(), dt.month(), dt.day(),
+                dt.hour(), dt.minute(), dt.second(),
+                TIMEZONE_OFFSET_H);
+  oledAddLine("RTC %02d:%02d UTC+%d",
+              dt.hour(), dt.minute(), TIMEZONE_OFFSET_H);
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Envoie une trame de notification de redémarrage sur le port LoRaWAN 2
+// @note   Payload : 1 octet 0x01 — permet de détecter un redémarrage côté serveur
+// @note   Port 2 distinct des trames data (port 1) pour filtrage applicatif
+// ---------------------------------------------------------------------------*
+void sendRestartPayload()
+{
+  Serial.println("[LoRa] Envoi notification de redemarrage (port 2)...");
+  oledAddLine("TX Restart...");
+
+  ledSet(60, 60, 60);   // LED blanche : envoi en cours
+  TX_RETURN_TYPE result = myLora.txCommand("mac tx uncnf 2 ", "52657374617274", false);  // "Restart" ASCII
+  ledOff();
+
+  bool ok = (result == TX_SUCCESS || result == TX_WITH_RX);
+  Serial.printf("[LoRa] Notification redemarrage : %s\n", ok ? "OK" : "KO");
+  oledAddLine("Restart TX %s", ok ? "OK" : "KO");
+
+  if (result == TX_WITH_RX)
+    syncRtcFromLoRa();
+}
+
+// ---------------------------------------------------------------------------*
 // @brief  Initialise le RN2483 et réalise la jointure OTAA sur Orange EU868
 // @note   Bloque jusqu'à jointure réussie ou 3 tentatives épuisées
 // @note   En cas d'échec définitif : LED rouge fixe + boucle infinie
@@ -650,6 +885,7 @@ void initLoRa()
   {
     Serial.printf("[LoRa] Tentative jointure OTAA %d/%d (module : %s)...\n",
                   attempt, MAX_ATTEMPTS, g_label.c_str());
+    oledAddLine("LoRa join %d/%d...", attempt, MAX_ATTEMPTS);
 
     ledSet(0, 0, 180);   // LED bleue : tentative en cours
 
@@ -658,14 +894,26 @@ void initLoRa()
     if (joined)
     {
       Serial.printf("[LoRa] OK Jointure OTAA reussie ! (module : %s)\n", g_label.c_str());
+      oledAddLine("LoRa JOIN OK");
       ledSet(0, 200, 0);   // LED verte : succès
       delay(2000);
       ledOff();
+      syncRtcFromLoRa();   // synchro RTC depuis l'heure réseau
+
+      DateTime now = rtc.now();
+      Serial.printf("[RTC] Date/heure : %04d-%02d-%02d %02d:%02d:%02d\n",
+                    now.year(), now.month(), now.day(),
+                    now.hour(), now.minute(), now.second());
+      oledAddLine("%02d/%02d/%04d %02d:%02d",
+                  now.day(), now.month(), now.year(),
+                  now.hour(), now.minute());
+      sendRestartPayload();
       return;
     }
 
     ledSet(200, 0, 0);   // LED rouge : échec
     Serial.println("[LoRa] Echec jointure - nouvelle tentative dans 10s");
+    oledAddLine("LoRa echec %d/%d", attempt, MAX_ATTEMPTS);
     delay(10000);
     ledOff();
   }
@@ -675,6 +923,8 @@ void initLoRa()
   Serial.printf("[LoRa]   - Les cles du module '%s' dans secret.h\n", g_label.c_str());
   Serial.println("[LoRa]   - L'enregistrement du device sur Orange Live Objects");
   Serial.println("[LoRa]   - La couverture reseau Orange LoRaWAN sur votre site");
+  oledAddLine("LoRa ECHEC!");
+  oledAddLine("Verif cles/reseau");
 
   ledSet(200, 0, 0);   // LED rouge fixe : erreur fatale
 
@@ -767,14 +1017,18 @@ void sendPayload(const NodeData& node)
 
   ledOff();
 
+  bool txOk = false;
   switch (result)
   {
     case TX_SUCCESS:
       Serial.println("[LoRa] OK Trame envoyee");
+      txOk = true;
       break;
 
     case TX_WITH_RX:
       Serial.println("[LoRa] OK Trame envoyee + downlink recu");
+      txOk = true;
+      syncRtcFromLoRa();   // profite du downlink pour resynchroniser le RTC
       break;
 
     case TX_FAIL:
@@ -785,6 +1039,14 @@ void sendPayload(const NodeData& node)
       Serial.printf("[LoRa] Resultat inattendu : %d\n", (int)result);
       break;
   }
+
+  DateTime ts = rtc.now();
+  if (txOk)
+    oledAddLine("%02d:%02d %.1fkg %.1fC",
+                ts.hour(), ts.minute(), node.poids1_kg, node.temp_c);
+  else
+    oledAddLine("%02d:%02d %.1fkg %.0fC KO",
+                ts.hour(), ts.minute(), node.poids1_kg, node.temp_c);
 }
 
 // ---------------------------------------------------------------------------*
@@ -894,7 +1156,8 @@ void printMeasures(const NodeData& node)
 // ============================================================
 void setup()
 {
-  esp_log_level_set("Wire", ESP_LOG_NONE);  // supprime les erreurs -1 du bus I2C (NACK = périphérique absent)
+  esp_log_level_set("Wire",     ESP_LOG_NONE);  // supprime les erreurs Wire ESP-IDF
+  esp_log_level_set("Wire.cpp", ESP_LOG_NONE);  // supprime les erreurs Wire Arduino HAL
   bootWait();             // attente 10s + affichage infos de compilation
   initSensors();          // bus I2C + HX711
   randomSeed(esp_random()); // graine pour balances BT simulées (2/3/4)
@@ -903,27 +1166,91 @@ void setup()
 }
 
 // ---------------------------------------------------------------------------*
-// @brief  Traite les commandes reçues sur le port série
-// @note   'c' → calibration HX711   '?' → aide
+// @brief  Traite les commandes reçues sur le port série (ligne complète)
+// @note   c → calibration HX711
+// @note   h HH:MM → régler l'heure du DS3231
+// @note   d DD/MM/YYYY → régler la date du DS3231
+// @note   ? → aide
 // ---------------------------------------------------------------------------*
 void handleSerial()
 {
   if (!Serial.available())
     return;
 
-  char cmd = Serial.read();
-  while (Serial.available()) Serial.read();   // vide le buffer
+  // Lecture ligne complète (même logique que la saisie de calibration)
+  char    lineBuf[32] = {};
+  uint8_t len         = 0;
+  while (true)
+  {
+    if (Serial.available())
+    {
+      char c = Serial.read();
+      if (c == '\r' || c == '\n')
+      {
+        delay(5);
+        while (Serial.available()) Serial.read();
+        break;
+      }
+      if (len < sizeof(lineBuf) - 1)
+        lineBuf[len++] = c;
+    }
+  }
+
+  if (len == 0) return;
+
+  char        cmd = lineBuf[0];
+  const char* arg = (len > 2) ? &lineBuf[2] : "";   // argument après "x "
 
   switch (cmd)
   {
     case 'c': case 'C':
       calibrateHX711();
       break;
+
+    case 'h': case 'H':
+    {
+      int hh = 0, mm = 0;
+      if (sscanf(arg, "%d:%d", &hh, &mm) == 2
+          && hh >= 0 && hh < 24 && mm >= 0 && mm < 60)
+      {
+        DateTime now = rtc.now();
+        rtc.adjust(DateTime(now.year(), now.month(), now.day(), hh, mm, 0));
+        Serial.printf("[CMD] Heure reglée : %02d:%02d:00\n", hh, mm);
+        oledAddLine("Heure %02d:%02d", hh, mm);
+      }
+      else
+      {
+        Serial.println("[CMD] Format invalide — usage : h HH:MM  (ex: h 23:45)");
+      }
+      break;
+    }
+
+    case 'd': case 'D':
+    {
+      int dd = 0, mo = 0, yyyy = 0;
+      if (sscanf(arg, "%d/%d/%d", &dd, &mo, &yyyy) == 3
+          && dd >= 1 && dd <= 31 && mo >= 1 && mo <= 12 && yyyy >= 2000)
+      {
+        DateTime now = rtc.now();
+        rtc.adjust(DateTime(yyyy, mo, dd, now.hour(), now.minute(), now.second()));
+        Serial.printf("[CMD] Date reglée : %02d/%02d/%04d\n", dd, mo, yyyy);
+        oledAddLine("Date %02d/%02d/%04d", dd, mo, yyyy);
+      }
+      else
+      {
+        Serial.println("[CMD] Format invalide — usage : d DD/MM/YYYY  (ex: d 27/05/2026)");
+      }
+      break;
+    }
+
     case '?':
       Serial.println("[CMD] Commandes disponibles :");
-      Serial.println("[CMD]   c  -> calibration HX711 (2 points)");
-      Serial.println("[CMD]   ?  -> cette aide");
+      Serial.println("[CMD]   c              -> calibration HX711 (2 points)");
+      Serial.println("[CMD]   h HH:MM        -> regler l'heure  (ex: h 23:45)");
+      Serial.println("[CMD]   d DD/MM/YYYY   -> regler la date  (ex: d 27/05/2026)");
+      Serial.println("[CMD]   ?              -> cette aide");
       break;
+
     default:
       break;
   }
@@ -931,11 +1258,22 @@ void handleSerial()
 
 void loop()
 {
-  static uint32_t lastMeasure = 0;
-  static uint32_t lastSend    = 0;
+  static uint32_t lastMeasure   = 0;
+  static uint32_t lastSend      = 0;
+  static uint32_t lastHeartbeat = 0;
   uint32_t now = millis();
 
   handleSerial();
+
+#if HEARTBEAT_INTERVAL_MS > 0
+  if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS)
+  {
+    lastHeartbeat = now;
+    ledSet(0, 80, 0);   // vert bref : programme actif
+    delay(30);
+    ledOff();
+  }
+#endif
 
   if (now - lastMeasure >= MEASURE_INTERVAL_MS)
   {

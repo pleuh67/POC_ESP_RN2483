@@ -16,6 +16,10 @@ void  initDefaultConfig();                       // Remplit g_config avec les va
 bool  loadConfig();                              // Charge g_config depuis EEPROM (CRC vérifié)
 bool  saveConfig();                              // Écrit g_config en EEPROM avec CRC recalculé
 
+// ── OLED SH1106 ──────────────────────────────────────────────
+void  oledInit();                                // Initialise l'écran OLED (Wire déjà actif)
+void  oledAddLine(const char* fmt, ...);         // Scroll + affiche une ligne (printf-style)
+
 // ── Boot ─────────────────────────────────────────────────────
 void  bootWait();                                // Clignotement orange + bannière série
 
@@ -38,13 +42,16 @@ bool  testRN2483();                              // Autobaud + firmware + DevEUI
 bool  testDS3231();                              // Présence + lecture date/heure
 bool  testBME280();                              // Présence + lecture temp/hum/pression
 float max44009ReadLux();                         // Lecture directe I2C MAX44009 (lux)
-void  calibrateHX711();                          // Calibration 2 points : tare + 2.5 kg
-bool  testMAX44009();                            // Présence + lecture luminosité
+float readLux();                                 // Lecture lux via capteur détecté (BH1750 ou MAX44009)
+void  calibrateHX711();                          // Calibration 2 points : tare + poids ref
+bool  testLuxSensor();                           // Test capteur luminosité détecté au boot
 bool  testINA219();                              // Présence + lecture tension/courant
 bool  testHX711();                               // Présence + valeur brute + kg
 void  runPeripheralTests();                      // Lance tous les tests, affiche bilan
 
 // ── LoRaWAN ──────────────────────────────────────────────────
+bool  syncRtcFromLoRa();                         // Synchro DS3231 via mac get gpstime (RN2483 >= 1.0.5)
+void  sendRestartPayload();                      // Trame de redémarrage port 2 (0x01) après join
 void  handleSerial();                            // Interpréteur commandes série (c, ?)
 void  printMeasures(const NodeData& node);       // Affiche les mesures sur une ligne
 void  sendPayload(const NodeData& node);         // Encode et envoie 19 octets (LE)

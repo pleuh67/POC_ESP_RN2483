@@ -47,17 +47,26 @@
 #define HX711_CALIB_KG       11.0f // 2.5f  // poids de référence pour la calibration (kg)
 
 // Adresses I2C des périphériques
+#define I2C_ADDR_OLED     0x3C  // SH1106 OLED 128×64 (SA0=GND → 0x3C, SA0=VCC → 0x3D)
+#define OLED_COLS         20    // caractères par ligne (font 6×8, 128px)
+#define OLED_ROWS          8    // lignes visibles (font 6×8, 64px)
+
 #define I2C_ADDR_DS3231   0x68  // RTC temps réel
 #define I2C_ADDR_EEPROM   0x57  // AT24C32 — stockage persistant
 #define I2C_ADDR_BME280   0x76  // Temp / Humidité / Pression
-#define I2C_ADDR_LUX      0x4A  // MAX44009 — luminosité (adresse par défaut)
+#define I2C_ADDR_MAX44009     0x4A  // MAX44009 — luminosité (ADDR=GND)
+#define I2C_ADDR_BH1750_LOW   0x23  // BH1750   — luminosité (ADDR=GND)
+#define I2C_ADDR_BH1750_HIGH  0x5C  // BH1750   — luminosité (ADDR=VCC)
+#define I2C_ADDR_LUX          I2C_ADDR_MAX44009  // alias générique (résolu à l'init)
 #define I2C_ADDR_INA219   0x40  // Tension / Courant batterie
 
 // ============================================================
 // Paramètres d'envoi
 // ============================================================
 #define SEND_INTERVAL_MS     (DEFAULT_SEND_INTERVAL_MIN * 60000UL)  // Converti en ms
-#define MEASURE_INTERVAL_MS  10000UL                        // Affichage terminal (dev)
+#define MEASURE_INTERVAL_MS   10000UL                       // Affichage terminal (dev)
+#define HEARTBEAT_INTERVAL_MS  5000UL                       // Flash vert LED (ms) — 0 = désactivé
+#define TIMEZONE_OFFSET_H      2                            // Décalage UTC → heure locale (2=été, 1=hiver)
 // Note : le port LoRaWAN est hardcodé à 1 dans la librairie rn2xx3 (txCommand "mac tx uncnf 1")
 
 // ============================================================
