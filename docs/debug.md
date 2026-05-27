@@ -77,3 +77,17 @@ c  ← taper dans le terminal
 ```
 
 Reporter la valeur `HX711_SCALE` dans `include/config.h` et recompiler.
+
+---
+
+## Messages Wire `requestFrom(): i2cWriteReadNonStop returned Error -1`
+
+Ces messages proviennent du framework Wire (pas du code applicatif). Ils apparaissent quand un périphérique I2C ne répond pas (NACK ou absent) : scanner au boot, capteur non branché, adresse incorrecte.
+
+Ils sont supprimés dès le début de `setup()` par :
+
+```cpp
+esp_log_level_set("Wire", ESP_LOG_NONE);
+```
+
+Pour les réactiver temporairement (diagnostic câblage), remplacer `ESP_LOG_NONE` par `ESP_LOG_ERROR`.

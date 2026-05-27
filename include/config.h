@@ -44,9 +44,7 @@
 // Broches HX711 — Balance 1 (connectée directement à l'ESP32-S3)
 #define HX711_PIN_DOUT  10   // GPIO10 — données HX711
 #define HX711_PIN_SCK   11   // GPIO11 — horloge HX711
-#define HX711_SCALE   -1044326.38f  // facteur d'étalonnage   (mis à jour par calibrateHX711())
-#define HX711_OFFSET          0L    // offset tare à vide      (mis à jour par calibrateHX711())
-#define HX711_CALIB_KG        2.5f  // poids de référence pour la calibration (kg)
+#define HX711_CALIB_KG       11.0f // 2.5f  // poids de référence pour la calibration (kg)
 
 // Adresses I2C des périphériques
 #define I2C_ADDR_DS3231   0x68  // RTC temps réel
@@ -58,8 +56,7 @@
 // ============================================================
 // Paramètres d'envoi
 // ============================================================
-#define INTERVAL_PAYLOAD     5                              // Intervalle d'envoi LoRa en minutes
-#define SEND_INTERVAL_MS     (INTERVAL_PAYLOAD * 60000UL)  // Converti en ms
+#define SEND_INTERVAL_MS     (DEFAULT_SEND_INTERVAL_MIN * 60000UL)  // Converti en ms
 #define MEASURE_INTERVAL_MS  10000UL                        // Affichage terminal (dev)
 // Note : le port LoRaWAN est hardcodé à 1 dans la librairie rn2xx3 (txCommand "mac tx uncnf 1")
 
@@ -70,8 +67,8 @@
 // ============================================================
 #define DEFAULT_RUCHER_ID          42         // Identifiant rucher (0-255)
 #define DEFAULT_LABEL              "RUCHE_01" // Nom du nœud
-#define DEFAULT_HX711_SCALE        -1044326.38f // Facteur étalonnage HX711
-#define DEFAULT_HX711_OFFSET       0L         // Offset tare HX711 à vide
+#define DEFAULT_HX711_SCALE        -1044858.81f // Facteur étalonnage HX711 (issu calibrateHX711())
+#define DEFAULT_HX711_OFFSET       -1538424L    // Offset tare HX711 à vide  (issu calibrateHX711())
 #define DEFAULT_VBAT_FACTOR        1.0f       // Correctif tension batterie INA219
 #define DEFAULT_VSOL_FACTOR        1.0f       // Correctif tension solaire ADC
 #define DEFAULT_SEND_INTERVAL_MIN  5          // Intervalle envoi LoRa (minutes)

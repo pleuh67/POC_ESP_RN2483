@@ -5,6 +5,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <esp_log.h>    // esp_log_level_set() — suppression sélective des logs ESP-IDF
 #include <Adafruit_NeoPixel.h>
 #include <rn2xx3.h>
 #include <RTClib.h>
@@ -13,8 +14,10 @@
 #include <HX711.h>
 #include "config.h"
 #include "node_data.h"
+#include "node_config.h"
 #include "functions.h"
 #include "secret.h"   // table des modules + clés OTAA - non commité sur git
+#include <I2C_eeprom.h>
 
 // ============================================================
 // Objets globaux
@@ -30,6 +33,12 @@ Adafruit_INA219    ina219(I2C_ADDR_INA219);        // 0x40 — tension / courant
 
 // Balance 1 — HX711 (GPIO10/11)
 HX711              scale;
+
+// EEPROM AT24C32 (0x57) — config persistante
+I2C_eeprom         eeprom(I2C_ADDR_EEPROM, 4096);
+
+// Configuration active du nœud (chargée depuis EEPROM au boot)
+NodeConfig         g_config;
 
 // Clés actives — renseignées au boot par lookupDevice()
 String  g_deveui;
@@ -214,14 +223,14 @@ bool testDS3231()
 bool testBME280()
 {
   Serial.println("[Test] BME280...");
-  if (!bme.begin(I2C_ADDR_BME280))
+  float t = bme.readTemperature();
+  if (isnan(t))
   {
-    Serial.println("[Test] BME280              ECHEC (non detecte sur I2C 0x76)");
+    Serial.println("[Test] BME280              ECHEC (NaN — verifier adresse 0x76/0x77 et cablage)");
     return false;
   }
   Serial.printf("[Test] BME280              OK (%.1f C  %.1f %%  %.1f hPa)\n",
-                bme.readTemperature(), bme.readHumidity(),
-                bme.readPressure() / 100.0f);
+                t, bme.readHumidity(), bme.readPressure() / 100.0f);
   return true;
 }
 
@@ -305,6 +314,101 @@ bool testHX711()
 }
 
 // ---------------------------------------------------------------------------*
+// @brief  CRC32 (polynôme zip) sur un bloc mémoire
+// @param  data  Pointeur sur les données
+// @param  len   Nombre d'octets
+// @return uint32_t  Valeur CRC32
+// ---------------------------------------------------------------------------*
+static uint32_t crc32(const uint8_t* data, size_t len)
+{
+  uint32_t crc = 0xFFFFFFFF;
+  for (size_t i = 0; i < len; i++)
+  {
+    crc ^= data[i];
+    for (uint8_t b = 0; b < 8; b++)
+      crc = (crc >> 1) ^ (0xEDB88320UL & -(crc & 1));
+  }
+  return ~crc;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Remplit g_config avec les valeurs par défaut de config.h
+// ---------------------------------------------------------------------------*
+void initDefaultConfig()
+{
+  g_config.rucher_id         = DEFAULT_RUCHER_ID;
+  strncpy(g_config.label, DEFAULT_LABEL, sizeof(g_config.label) - 1);
+  g_config.label[sizeof(g_config.label) - 1] = '\0';
+  g_config.hx711_scale       = DEFAULT_HX711_SCALE;
+  g_config.hx711_offset      = DEFAULT_HX711_OFFSET;
+  g_config.vbat_factor       = DEFAULT_VBAT_FACTOR;
+  g_config.vsol_factor       = DEFAULT_VSOL_FACTOR;
+  g_config.send_interval_min = DEFAULT_SEND_INTERVAL_MIN;
+  memset(g_config._reserved, 0, sizeof(g_config._reserved));
+  g_config.crc = crc32((const uint8_t*)&g_config, NODE_CONFIG_DATA_SIZE);
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Charge la config depuis l'EEPROM AT24C32 ; repli sur valeurs par défaut
+// @return bool  True si CRC valide, false si valeurs par défaut appliquées
+// @note   Wire doit être initialisé avant d'appeler cette fonction
+// ---------------------------------------------------------------------------*
+bool loadConfig()
+{
+  Serial.println("[Config] Chargement depuis EEPROM...");
+
+  if (!eeprom.begin())
+  {
+    Serial.println("[Config] EEPROM absente — valeurs par defaut appliquees");
+    initDefaultConfig();
+    return false;
+  }
+
+  eeprom.readBlock(EEPROM_ADDR_CONFIG, (uint8_t*)&g_config, sizeof(NodeConfig));
+
+  uint32_t expected = crc32((const uint8_t*)&g_config, NODE_CONFIG_DATA_SIZE);
+  if (expected != g_config.crc)
+  {
+    Serial.printf("[Config] CRC invalide (lu=0x%08X calc=0x%08X) — valeurs par defaut\n",
+                  g_config.crc, expected);
+    initDefaultConfig();
+    return false;
+  }
+
+  Serial.println("------------------------------------------------------------");
+  Serial.println("  CONFIG EEPROM OK");
+  Serial.println("------------------------------------------------------------");
+  Serial.printf("  Label          : %s\n",    g_config.label);
+  Serial.printf("  Rucher ID      : %u\n",    g_config.rucher_id);
+  Serial.printf("  HX711 scale    : %.2f\n",  g_config.hx711_scale);
+  Serial.printf("  HX711 offset   : %ld\n",   g_config.hx711_offset);
+  Serial.printf("  Vbat factor    : %.3f\n",  g_config.vbat_factor);
+  Serial.printf("  Vsol factor    : %.3f\n",  g_config.vsol_factor);
+  Serial.printf("  Send interval  : %u min\n", g_config.send_interval_min);
+  Serial.println("------------------------------------------------------------");
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
+// @brief  Sauvegarde g_config dans l'EEPROM AT24C32 avec CRC recalculé
+// @return bool  True si écriture réussie
+// ---------------------------------------------------------------------------*
+bool saveConfig()
+{
+  g_config.crc = crc32((const uint8_t*)&g_config, NODE_CONFIG_DATA_SIZE);
+
+  if (!eeprom.begin())
+  {
+    Serial.println("[Config] ERREUR : EEPROM absente — sauvegarde impossible");
+    return false;
+  }
+
+  eeprom.writeBlock(EEPROM_ADDR_CONFIG, (uint8_t*)&g_config, sizeof(NodeConfig));
+  Serial.println("[Config] Config sauvegardee en EEPROM OK");
+  return true;
+}
+
+// ---------------------------------------------------------------------------*
 // @brief  Initialise le bus I2C, les capteurs et le HX711
 // @note   Appelé dans setup() avant runPeripheralTests()
 // ---------------------------------------------------------------------------*
@@ -327,12 +431,19 @@ void initSensors()
   Serial.println();
 
   scanI2C();
+  loadConfig();   // charge g_config depuis EEPROM (ou valeurs par défaut)
+
+  // BME280 — tente 0x76 puis 0x77 (selon câblage broche SDO)
+  if (!bme.begin(0x76) && !bme.begin(0x77))
+    Serial.println("[BME280] ATTENTION : capteur non detecte (0x76 et 0x77 essayes)");
+  else
+    Serial.println("[BME280] Initialise OK");
 
   scale.begin(HX711_PIN_DOUT, HX711_PIN_SCK);
-  scale.set_scale(HX711_SCALE);    // pas de tare : la balance est en charge au démarrage
-  scale.set_offset(HX711_OFFSET);  // offset de zéro issu de la calibration
+  scale.set_scale(g_config.hx711_scale);
+  scale.set_offset(g_config.hx711_offset);
   Serial.printf("[HX711] Balance 1 initialisee (DOUT=GPIO%d, SCK=GPIO%d, scale=%.1f, offset=%ld)\n",
-                HX711_PIN_DOUT, HX711_PIN_SCK, HX711_SCALE, (long)HX711_OFFSET);
+                HX711_PIN_DOUT, HX711_PIN_SCK, g_config.hx711_scale, g_config.hx711_offset);
 }
 
 // ---------------------------------------------------------------------------*
@@ -386,9 +497,11 @@ void scanI2C()
 // ---------------------------------------------------------------------------*
 void readSensors(NodeData& node)
 {
-  node.rucher_id = RUCHER_ID;
-  node.temp_c    = bme.readTemperature();
-  node.hum_pct   = bme.readHumidity();
+  node.rucher_id = g_config.rucher_id;
+  float t = bme.readTemperature();
+  float h = bme.readHumidity();
+  node.temp_c  = isnan(t) ? 0.0f : t;
+  node.hum_pct = isnan(h) ? 0.0f : h;
 
   float lux = max44009ReadLux();
   node.lux = (lux >= 0.0f) ? (uint16_t)lux : 0;
@@ -717,25 +830,48 @@ void calibrateHX711()
   Serial.printf("  Tare OK  - valeur brute a vide : %ld\n", rawTare);
 
   // ── Étape 2 : poids de référence ──────────────────────────
-  Serial.printf("  Etape 2/2 : posez %.2f kg sur la balance\n", HX711_CALIB_KG);
-  Serial.println("  -> Poids en place, appuyez sur Entree...");
-  while (!Serial.available()) { delay(10); }
-  while (Serial.available())  { Serial.read(); }
+  Serial.println("  Etape 2/2 : posez un poids de reference sur la balance");
+  Serial.printf( "  -> Saisissez le poids en kg [%.3f] puis Entree : ", HX711_CALIB_KG);
+
+  char    inputBuf[16] = {};
+  uint8_t inputLen     = 0;
+  while (true)
+  {
+    if (Serial.available())
+    {
+      char c = Serial.read();
+      if (c == '\n' || c == '\r')
+      {
+        delay(5);
+        while (Serial.available()) Serial.read();  // vide \r\n résiduel
+        break;
+      }
+      if (inputLen < sizeof(inputBuf) - 1)
+        inputBuf[inputLen++] = c;
+    }
+    delay(5);
+  }
+
+  float calibKg = (inputLen > 0) ? atof(inputBuf) : 0.0f;
+  if (calibKg <= 0.0f)
+    calibKg = HX711_CALIB_KG;
+  Serial.printf("  -> Poids utilise : %.3f kg\n", calibKg);
 
   long  rawCharge = scale.read_average(10);
-  float newScale  = (float)(rawCharge - rawTare) / HX711_CALIB_KG;
+  float newScale  = (float)(rawCharge - rawTare) / calibKg;
   scale.set_scale(newScale);
+
+  g_config.hx711_scale  = newScale;
+  g_config.hx711_offset = rawTare;
 
   Serial.println("------------------------------------------------------------");
   Serial.printf("  Tare          : %ld\n",   rawTare);
   Serial.printf("  Brut charge   : %ld\n",   rawCharge);
   Serial.printf("  Nouveau scale : %.2f\n",  newScale);
-  Serial.printf("  Verification  : %.3f kg (doit etre %.2f kg)\n",
-                scale.get_units(5), HX711_CALIB_KG);
+  Serial.printf("  Verification  : %.3f kg (doit etre %.3f kg)\n",
+                scale.get_units(5), calibKg);
   Serial.println("------------------------------------------------------------");
-  Serial.println("  -> Mettez a jour dans include/config.h :");
-  Serial.printf( "     #define HX711_SCALE   %.2ff\n", newScale);
-  Serial.printf( "     #define HX711_OFFSET  %ldL\n",  rawTare);
+  saveConfig();
   Serial.println("============================================================");
   Serial.println();
 }
@@ -758,6 +894,7 @@ void printMeasures(const NodeData& node)
 // ============================================================
 void setup()
 {
+  esp_log_level_set("Wire", ESP_LOG_NONE);  // supprime les erreurs -1 du bus I2C (NACK = périphérique absent)
   bootWait();             // attente 10s + affichage infos de compilation
   initSensors();          // bus I2C + HX711
   randomSeed(esp_random()); // graine pour balances BT simulées (2/3/4)

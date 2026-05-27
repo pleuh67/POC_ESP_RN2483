@@ -11,6 +11,11 @@
 void  ledSet(uint8_t r, uint8_t g, uint8_t b); // Applique une couleur RGB
 void  ledOff();                                  // Éteint la LED
 
+// ── Config persistante EEPROM ────────────────────────────────
+void  initDefaultConfig();                       // Remplit g_config avec les valeurs de config.h
+bool  loadConfig();                              // Charge g_config depuis EEPROM (CRC vérifié)
+bool  saveConfig();                              // Écrit g_config en EEPROM avec CRC recalculé
+
 // ── Boot ─────────────────────────────────────────────────────
 void  bootWait();                                // Clignotement orange + bannière série
 
