@@ -61,6 +61,12 @@
 #define I2C_ADDR_INA219   0x40  // Tension / Courant batterie
 
 // ============================================================
+// Bouton poussoir — envoi forcé d'un payload LoRa
+// ============================================================
+#define BUTTON_PIN        7      // GPIO7 — bouton vers GND (INPUT_PULLUP interne)
+#define BUTTON_DEBOUNCE_MS 50    // Anti-rebond (ms)
+
+// ============================================================
 // Paramètres d'envoi
 // ============================================================
 #define SEND_INTERVAL_MS     (DEFAULT_SEND_INTERVAL_MIN * 60000UL)  // Converti en ms

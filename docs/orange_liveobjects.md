@@ -5,7 +5,7 @@
 - Un compte Orange Live Objects actif
   (inscription sur https://liveobjects.orange-business.com)
 - Le **DevEUI** matériel de votre RN2483
-  (récupéré via l'étape 1 de la mise en route — voir README.md)
+  (affiché dans les **TESTS PERIPHERIQUES** au démarrage — voir README.md étape 1)
 
 ---
 
@@ -26,8 +26,8 @@ Sélectionnez le type : **LoRa device (OTAA)**
 
 | Champ | Valeur | Remarque |
 |---|---|---|
-| **Name** | `POC_ESP_RN2483` | Nom libre |
-| **DevEUI** | `0004A30B001A2B3C` | Lu sur le port série (étape 1) |
+| **Name** | `RUCHE_01` | Nom libre |
+| **DevEUI** | `0004A30B001A2B3C` | Lu sur le port série au boot |
 | **AppEUI** | valeur de votre choix | 8 octets hex, ex : `0000000000000001` |
 | **AppKey** | valeur de votre choix | 16 octets hex, clé AES-128 |
 | **Profile** | `EU868` | Obligatoire pour la France |
@@ -37,17 +37,15 @@ Sélectionnez le type : **LoRa device (OTAA)**
 
 ### 4. Valider et sauvegarder
 
-Cliquez sur **Create**. Le device apparaît dans la liste avec le statut **Inactive**
+Cliquez sur **Create**. Le device apparaît avec le statut **Inactive**
 (normal — il passera à **Active** dès la première jointure OTAA réussie).
 
 ### 5. Renseigner les clés dans secret.h
 
-Copiez AppEUI et AppKey dans `include/secret.h` :
-
 ```cpp
 static const LoraDevice LORA_DEVICES[] =
 {
-    { "0004A30B001A2B3C", "0000000000000001", "2B7E151628AED2A6ABF7158809CF4F3C", "Module-01" },
+    { "0004A30B001A2B3C", "0000000000000001", "2B7E151628AED2A6ABF7158809CF4F3C", "Ruche-01" },
     { nullptr, nullptr, nullptr, nullptr }
 };
 ```
@@ -56,23 +54,34 @@ static const LoraDevice LORA_DEVICES[] =
 
 ## Vérifier la réception des trames
 
-Après une jointure OTAA réussie, les trames remontées par le device
-sont visibles dans :
+Après une jointure OTAA réussie, les trames sont visibles dans :
 
-**Devices → POC_ESP_RN2483 → Messages (onglet Data)**
+**Devices → RUCHE_01 → Messages (onglet Data)**
 
 Chaque trame affiche :
 - L'horodatage de réception
-- Le port applicatif (`fPort`)
+- Le port applicatif (`fPort`) : **1** pour les données capteurs, **2** pour les redémarrages
 - Le payload brut en hexadécimal
 - Le RSSI et le SNR (qualité du signal)
 
+### Filtrage par port
+
+| Port | Contenu | Utilisation |
+|---|---|---|
+| 1 | Données capteurs (19 octets) | Mesures ruche — à décoder avec le codec |
+| 2 | `Restart` ASCII (7 octets) | Notification de redémarrage du nœud |
+
+Pour détecter les redémarrages côté application : filtrer `fPort = 2`.
+Pour les données : filtrer `fPort = 1`.
+
 ---
 
-## Configurer un codec de décodage
+## Configurer le codec de décodage
 
-Pour décoder le payload (19 octets) en valeurs lisibles, copiez le codec JavaScript
+Pour décoder le payload (19 octets, port 1) en valeurs lisibles, copiez le codec JavaScript
 depuis [`docs/codec_lora.md`](codec_lora.md) dans **Applications → votre application → Codec**.
+
+Le payload port 2 (`Restart`) ne nécessite pas de codec : sa présence seule est l'information.
 
 ---
 
@@ -82,5 +91,5 @@ Le réseau Orange LoRaWAN couvre les principales agglomérations françaises.
 Pour vérifier la couverture à votre emplacement :
 https://iotjourney.orange.com/fr-FR/reseau/couverture-reseau
 
-En cas de doute, le module RN2483 affichera un échec de jointure OTAA
-et le message d'erreur sera visible sur le port série.
+En cas de couverture insuffisante, le RN2483 affichera un échec de jointure OTAA
+après 3 tentatives et la LED restera rouge fixe.

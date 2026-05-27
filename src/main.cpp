@@ -1163,6 +1163,9 @@ void setup()
   randomSeed(esp_random()); // graine pour balances BT simulées (2/3/4)
   runPeripheralTests();   // test LED, RN2483 et capteurs I2C
   initLoRa();             // lecture DevEUI + lookup clés + jointure OTAA
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Serial.printf("[BTN] Bouton envoi force sur GPIO%d (vers GND)\n", BUTTON_PIN);
 }
 
 // ---------------------------------------------------------------------------*
@@ -1261,9 +1264,28 @@ void loop()
   static uint32_t lastMeasure   = 0;
   static uint32_t lastSend      = 0;
   static uint32_t lastHeartbeat = 0;
+  static bool     btnPrev       = HIGH;  // état précédent bouton (pull-up → repos = HIGH)
   uint32_t now = millis();
 
   handleSerial();
+
+  // ── Bouton poussoir : envoi forcé d'un payload ───────────
+  bool btnNow = digitalRead(BUTTON_PIN);
+  if (btnPrev == HIGH && btnNow == LOW)   // front descendant détecté
+  {
+    delay(BUTTON_DEBOUNCE_MS);
+    if (digitalRead(BUTTON_PIN) == LOW)   // confirmation après anti-rebond
+    {
+      Serial.println("[BTN] Envoi force par bouton");
+      oledAddLine("BTN: envoi force");
+      NodeData node = {};
+      readSensors(node);
+      printMeasures(node);
+      sendPayload(node);
+      lastSend = millis();                // repart le chrono d'envoi normal
+    }
+  }
+  btnPrev = btnNow;
 
 #if HEARTBEAT_INTERVAL_MS > 0
   if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS)

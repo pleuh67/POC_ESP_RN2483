@@ -1,6 +1,6 @@
 # POC_ESP_2483
 
-> Preuve de concept : connexion LoRaWAN OTAA sur le réseau **Orange Live Objects**
+> Surveillance de ruchers LoRaWAN OTAA sur le réseau **Orange Live Objects**
 > avec un **ESP32-S3** et un module **RN2483 (Microchip)**, développé sous
 > **VSCode + PlatformIO**.
 
@@ -10,11 +10,11 @@
 
 1. [Matériel requis](#1-matériel-requis)
 2. [Architecture du projet](#2-architecture-du-projet)
-3. [Câblage](#3-câblage)
+3. [Câblage résumé](#3-câblage-résumé)
 4. [Installation et configuration](#4-installation-et-configuration)
 5. [Mise en route pas à pas](#5-mise-en-route-pas-à-pas)
 6. [Utilisation](#6-utilisation)
-7. [Adapter le payload à vos données](#7-adapter-le-payload-à-vos-données)
+7. [Format du payload LoRaWAN](#7-format-du-payload-lorawan)
 8. [Contraintes réseau EU868](#8-contraintes-réseau-eu868)
 9. [Dépendances](#9-dépendances)
 10. [Sécurité des clés](#10-sécurité-des-clés)
@@ -24,12 +24,20 @@
 
 ## 1. Matériel requis
 
-| Composant | Détail |
-|---|---|
-| MCU | ESP32-S3 (ex : DevKitC-1) |
-| Module LoRa | Microchip RN2483 (868 MHz, stack LoRaWAN intégré) |
-| Réseau | Orange Live Objects (LoRaWAN EU868) |
-| Connexion RN2483 | UART hardware 3.3V — **ne pas connecter en 5V** |
+| Composant | Référence | Rôle |
+|---|---|---|
+| MCU | ESP32-S3 DevKitC-1 | Microcontrôleur principal |
+| Module LoRa | Microchip RN2483 (868 MHz) | Stack LoRaWAN intégré |
+| RTC | DS3231 (0x68) | Horloge temps réel + AT24C32 EEPROM (0x57) |
+| Capteur T/H/P | BME280 (0x76) | Température, Humidité, Pression |
+| Luminosité | BH1750 (0x23) ou MAX44009 (0x4A) | Ensoleillement (auto-détecté) |
+| Balance | HX711 (GPIO10/11) | Cellule de charge poids ruche |
+| Tension/Courant | INA219 (0x40) | Surveillance batterie |
+| Afficheur | OLED SH1106 128×64 (0x3C) | Statut sans port série |
+| Bouton | Poussoir vers GND | Envoi forcé LoRa |
+| Réseau | Orange Live Objects | LoRaWAN EU868 |
+
+> Le RN2483 fonctionne **exclusivement en 3.3V** — ne jamais connecter en 5V.
 
 ---
 
@@ -38,22 +46,26 @@
 ```
 POC_ESP_2483/
 ├── docs/
-│   ├── boot_procedure.md       <- Procédure de boot et LED d'état
-│   ├── cablage.md              <- Schéma et détail du câblage
+│   ├── boot_procedure.md       <- Séquence de boot, LED d'état, OLED
+│   ├── cablage.md              <- Schéma complet de câblage
+│   ├── capteurs.md             <- Description de chaque capteur I2C / HX711
 │   ├── codec_lora.md           <- Format payload 19 octets + codec JS Orange
+│   ├── debug.md                <- LED d'état, affichage série, commandes
 │   ├── orange_liveobjects.md   <- Procédure enregistrement Orange
 │   ├── troubleshooting.md      <- Guide de dépannage
 │   └── unit_testing.md         <- Guide tests unitaires PlatformIO
 ├── include/
 │   ├── config.h                <- Broches, paramètres (commité)
+│   ├── functions.h             <- Prototypes des fonctions
+│   ├── node_config.h           <- Structure NodeConfig (config EEPROM)
 │   ├── node_data.h             <- Structure NodeData + NODE_PAYLOAD_BYTES
-│   ├── secret.h                <- Clés OTAA (NON commité - .gitignore)
+│   ├── secret.h                <- Clés OTAA (NON commité — .gitignore)
 │   └── secret.h.example        <- Template des clés (commité, sans valeurs)
 ├── src/
 │   └── main.cpp                <- Code principal
 ├── test/
 │   └── test_lookup/            <- Tests unitaires (pio test -e native)
-├── CLAUDE.md                   <- Conventions et instructions pour Claude Code
+├── CLAUDE.md                   <- Conventions pour Claude Code
 ├── .gitignore
 ├── platformio.ini
 └── README.md
@@ -61,21 +73,23 @@ POC_ESP_2483/
 
 ---
 
-## 3. Câblage
+## 3. Câblage résumé
 
 Voir [docs/cablage.md](docs/cablage.md) pour le schéma complet.
 
-Résumé rapide :
-
-| RN2483 | ESP32-S3 GPIO | Rôle |
+| Broche ESP32-S3 | Périphérique | Rôle |
 |---|---|---|
-| TX | GPIO 4 | Données RN2483 → ESP32-S3 |
-| RX | GPIO 5 | Données ESP32-S3 → RN2483 |
-| RST | GPIO 6 | Reset matériel du RN2483 |
-| VDD | 3.3V | Alimentation |
-| GND | GND | Masse commune |
+| GPIO 4 | RN2483 TX | UART RX vers ESP32-S3 |
+| GPIO 5 | RN2483 RX | UART TX vers RN2483 |
+| GPIO 6 | RN2483 RST | Reset matériel (LOW = reset) |
+| GPIO 7 | Bouton → GND | Envoi forcé LoRa (INPUT_PULLUP) |
+| GPIO 10 | HX711 DOUT | Données cellule de charge |
+| GPIO 11 | HX711 SCK | Horloge HX711 |
+| GPIO 35 | I2C SDA | Bus capteurs I2C |
+| GPIO 36 | I2C SCL | Bus capteurs I2C |
+| GPIO 48 | LED WS2812 | LED RGB d'état intégrée |
 
-> Les broches GPIO sont modifiables dans `include/config.h`.
+Tous les capteurs I2C (DS3231, EEPROM, BME280, BH1750/MAX44009, INA219, OLED) partagent le bus GPIO35/36.
 
 ---
 
@@ -96,8 +110,6 @@ cd POC_ESP_2483
 
 Ouvrez le dossier dans VSCode : **File → Open Folder → POC_ESP_2483**
 
-PlatformIO détecte automatiquement le `platformio.ini` et propose d'initialiser le projet.
-
 ### Créer le fichier secret.h
 
 ```bash
@@ -112,115 +124,119 @@ Renseignez vos clés dans `include/secret.h` (voir étape 5 ci-dessous).
 
 ### Étape 1 — Lire le DevEUI matériel du RN2483
 
-Dans `include/config.h`, vérifiez que `DEBUG_HWEUI` est à `true` (valeur par défaut).
+Dans `include/config.h`, `DEBUG_HWEUI` doit être à `true` (valeur par défaut).
 
-Compilez et flashez via PlatformIO (Upload), puis ouvrez le moniteur série (115200 bauds).
-
-Sortie attendue :
+Compilez, flashez via PlatformIO, puis ouvrez le moniteur série (115200 bauds).
+Le DevEUI s'affiche dans la section **TESTS PERIPHERIQUES** :
 
 ```
-============================================================
-  POC_ESP_2483 - ESP32-S3 + RN2483 OTAA - Orange EU868
-============================================================
-  ...infos compilation...
-------------------------------------------------------------
-  DEBUG_HWEUI      : true
-  ...
-============================================================
-
-------------------------------------------------------------
-  TESTS PERIPHERIQUES
-------------------------------------------------------------
-[Test] LED WS2812          OK (verifier visuellement)
 [Test] RN2483              OK (firmware : 1.0.5, DevEUI : 0004A30B001A2B3C)
-------------------------------------------------------------
-  Bilan : 2 OK  0 ECHEC
-------------------------------------------------------------
 ```
-
-Notez le **DevEUI**.
 
 ### Étape 2 — Enregistrer le device sur Orange Live Objects
 
-Voir [docs/orange_liveobjects.md](docs/orange_liveobjects.md) pour la procédure détaillée.
-
-En résumé :
-1. Connectez-vous sur https://liveobjects.orange-business.com
-2. **Devices → New device → LoRaWAN**
-3. Renseignez le DevEUI lu à l'étape 1
-4. Définissez un AppEUI (8 octets hex) et un AppKey (16 octets hex) de votre choix
-5. Sauvegardez — notez AppEUI et AppKey
+Voir [docs/orange_liveobjects.md](docs/orange_liveobjects.md).
 
 ### Étape 3 — Renseigner les clés dans secret.h
-
-Éditez `include/secret.h` :
 
 ```cpp
 static const LoraDevice LORA_DEVICES[] =
 {
-    { "0004A30B001A2B3C", "XXXXXXXXXXXXXXXX", "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "Module-01" },
+    { "0004A30B001A2B3C", "XXXXXXXXXXXXXXXX", "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "Ruche-01" },
     { nullptr, nullptr, nullptr, nullptr }
-};
-
-static const LoraDevice LORA_DEFAULT =
-{
-    "0000000000000000",
-    "XXXXXXXXXXXXXXXX",
-    "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-    "DEFAULT"
 };
 ```
 
 ### Étape 4 — Désactiver le mode debug DevEUI
 
-Dans `include/config.h` :
-
 ```cpp
+// include/config.h
 #define DEBUG_HWEUI  false
 ```
 
-### Étape 5 — Flasher et vérifier la jointure
+### Étape 5 — Calibrer la balance HX711
 
-Recompilez, flashez et ouvrez le moniteur série.
+Au premier démarrage, taper `c` dans le terminal série et suivre les instructions.
+Le facteur de calibration est sauvegardé automatiquement en EEPROM.
 
-Sortie attendue :
+### Étape 6 — Flasher et vérifier la jointure
 
 ```
-[LoRa] Tentative jointure OTAA 1/3 (module : Module-01)...
-[LoRa] OK Jointure OTAA reussie ! (module : Module-01)
-[LoRa] Envoi 19 octets : 000000000000000000000000000000000000 (module=Module-01)
-[LoRa] OK Trame envoyee
+[LoRa] OK Jointure OTAA reussie ! (module : Ruche-01)
+[RTC] Synchro OK : 2026-05-27 14:32:07 (UTC+2)
+[LoRa] Envoi notification de redemarrage (port 2)...
+[LoRa] Notification redemarrage : OK
 ```
 
 ---
 
 ## 6. Utilisation
 
-Une fois la jointure réussie, le device envoie une trame toutes les **5 minutes**
-(paramètre `INTERVAL_PAYLOAD` dans `config.h`, converti en ms via `SEND_INTERVAL_MS`).
+### Envoi automatique
 
-Les trames sont visibles dans Orange Live Objects :
-**Devices → votre device → Messages**
+Le nœud envoie une trame LoRaWAN toutes les **5 minutes** (réglable via
+`DEFAULT_SEND_INTERVAL_MIN` dans `config.h`). L'intervalle est sauvegardé
+en EEPROM dans `NodeConfig`.
+
+### Bouton d'envoi forcé
+
+Un appui sur le bouton (GPIO7 → GND) déclenche immédiatement une lecture
+de tous les capteurs et un envoi LoRaWAN. Le prochain envoi automatique
+repart de ce moment.
+
+### Commandes série (terminal PlatformIO)
+
+| Commande | Effet |
+|---|---|
+| `c` + Entrée | Lance la calibration HX711 (2 points, sauvegarde EEPROM) |
+| `h HH:MM` + Entrée | Règle l'heure du DS3231 (ex : `h 14:30`) |
+| `d DD/MM/YYYY` + Entrée | Règle la date du DS3231 (ex : `d 27/05/2026`) |
+| `?` + Entrée | Affiche la liste des commandes |
+
+> Activer `monitor_echo = yes` dans `platformio.ini` pour voir ce que l'on tape.
+
+### Afficheur OLED
+
+L'OLED SH1106 (8 lignes × 20 caractères) affiche en défilement :
+- Les résultats des tests au boot (capteur OK/FAIL + valeur mesurée)
+- Le statut de la jointure LoRa
+- La date/heure après synchro RTC
+- Chaque transmission : `HH:MM poids temp` ou `HH:MM poids temp KO`
+
+### Heartbeat LED
+
+Un flash vert de 30 ms toutes les 5 s confirme que le programme s'exécute
+(`HEARTBEAT_INTERVAL_MS` dans `config.h`, 0 = désactivé).
+
+### Configuration persistante (EEPROM)
+
+La structure `NodeConfig` (calibration HX711, facteurs de correction,
+intervalle d'envoi…) est stockée en EEPROM AT24C32 avec CRC32.
+Elle survit aux redémarrages. En cas de CRC invalide, les valeurs par défaut
+de `config.h` sont appliquées.
 
 ---
 
-## 7. Adapter le payload à vos données
+## 7. Format du payload LoRaWAN
 
-Le payload envoie **19 octets** (format fixe, big-endian) définis dans `include/node_data.h` :
+Le nœud envoie **19 octets** en little-endian sur **le port 1**.
+Un payload de redémarrage (`Restart` ASCII, 7 octets) est envoyé sur **le port 2**
+après chaque jointure OTAA.
 
-| Octets | Donnée          | Type   | Facteur |
-|--------|-----------------|--------|---------|
-| 0-1    | Température     | int16  | ×100    |
-| 2-3    | Humidité        | uint16 | ×100    |
-| 4-11   | Poids 1→4       | int16  | ×100    |
-| 12-13  | Tension batterie| uint16 | ×100    |
-| 14-15  | Tension solaire | uint16 | ×100    |
-| 16-17  | Luminosité      | uint16 | ×1      |
-| 18     | RucherID        | uint8  | ×1      |
+| Octets | Donnée           | Type   | Facteur | Résolution |
+|--------|------------------|--------|---------|------------|
+| 0      | RucherID         | uint8  | ×1      | 1          |
+| 1-2    | Température      | int16  | ×100    | 0.01 °C    |
+| 3-4    | Humidité         | uint16 | ×100    | 0.01 %     |
+| 5-6    | Luminosité       | uint16 | ×1      | 1 lux      |
+| 7-8    | Tension batterie | uint16 | ×100    | 0.01 V     |
+| 9-10   | Tension solaire  | uint16 | ×100    | 0.01 V     |
+| 11-12  | Poids Balance 1  | int16  | ×100    | 0.01 kg    |
+| 13-14  | Poids Balance 2  | int16  | ×100    | 0.01 kg    |
+| 15-16  | Poids Balance 3  | int16  | ×100    | 0.01 kg    |
+| 17-18  | Poids Balance 4  | int16  | ×100    | 0.01 kg    |
 
-Renseignez les champs du `NodeData` dans `loop()` avec les lectures réelles de vos capteurs.
-
-Le codec JavaScript de décodage est disponible dans [`docs/codec_lora.md`](docs/codec_lora.md).
+Le codec JavaScript de décodage est dans [`docs/codec_lora.md`](docs/codec_lora.md).
 
 ---
 
@@ -229,24 +245,30 @@ Le codec JavaScript de décodage est disponible dans [`docs/codec_lora.md`](docs
 | Paramètre | Valeur |
 |---|---|
 | Bande de fréquence | 868 MHz (ISM, libre) |
-| Canaux obligatoires | 868.10 / 868.30 / 868.50 MHz (125 kHz BW) |
-| Duty cycle max | 1% → 36 s de TX max par heure et par canal |
+| Duty cycle max | 1% → 36 s de TX max par heure par canal |
 | Puissance max | 14 dBm (25 mW) |
-| Spreading Factor | SF7 (rapide, courte portée) à SF12 (lent, longue portée) |
 
-> Ne pas descendre `INTERVAL_PAYLOAD` sous **1 minute** (60 000 ms).
-> La valeur par défaut de 5 minutes est un bon compromis pour un POC.
+> Ne pas descendre `DEFAULT_SEND_INTERVAL_MIN` sous **1 minute**.
+> La valeur par défaut de 5 minutes est un bon compromis.
 
 ---
 
 ## 9. Dépendances
 
-| Librairie | Source | Rôle |
-|---|---|---|
-| `jpmeijers/RN2xx3 Arduino Library` | [PlatformIO Registry](https://registry.platformio.org/libraries/jpmeijers/RN2xx3%20Arduino%20Library) | Communication UART avec le RN2483 |
-| `adafruit/Adafruit NeoPixel` | [PlatformIO Registry](https://registry.platformio.org/libraries/adafruit/Adafruit%20NeoPixel) | LED RGB WS2812 (GPIO48) |
+| Librairie | Rôle |
+|---|---|
+| `jpmeijers/RN2xx3 Arduino Library` | Communication UART RN2483 |
+| `adafruit/Adafruit NeoPixel @ ^1.12.3` | LED RGB WS2812 (GPIO48) |
+| `adafruit/RTClib @ ^2.1.4` | DS3231 RTC |
+| `robtillaart/I2C_EEPROM @ ^1.8.3` | AT24C32 EEPROM |
+| `adafruit/Adafruit BME280 Library @ ^2.2.4` | BME280 Temp/Hum/Pression |
+| `claws/BH1750` | BH1750 luminosité |
+| `adafruit/Adafruit SH110X` | OLED SH1106 128×64 |
+| `adafruit/Adafruit GFX Library` | Moteur graphique Adafruit |
+| `adafruit/Adafruit INA219 @ ^1.2.3` | INA219 tension/courant |
+| `bogde/HX711 @ ^0.7.5` | HX711 cellule de charge |
 
-Installée automatiquement par PlatformIO à la première compilation.
+Installées automatiquement par PlatformIO à la première compilation.
 
 ---
 
